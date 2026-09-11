@@ -1,0 +1,23 @@
+# Python 运行时产物
+**/__pycache__
+**/*.py[cod]
+
+# 版本仓库
+.git
+.gitignore
+
+# 本地环境与敏感信息（密钥通过 docker run -e / --env-file 注入，绝不打进镜像）
+.env
+.env.*
+
+# 运行时数据：容器内重新生成，或通过 -v ./data:/app/data 挂载持久化
+# 注意：data/knowledge_base（源文档）不排除，保证容器内可执行重建索引
+data/db
+data/qdrant
+data/qdrant_storage
+data/stats
+data/indexes
+
+# 离线实验与测试，不参与生产链路
+experiments
+tests

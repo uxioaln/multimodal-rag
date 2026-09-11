@@ -1,0 +1,14 @@
+dashscope==1.25.5
+qdrant-client>=1.9.0
+# numpy 2.4 不支持 Python 3.10（无 cp310 wheel），按解释器版本区分安装
+# 注：2.4.0 因向后兼容性 bug 被 yanked（撤回），3.11+ 改用 2.4.6
+numpy==2.4.6; python_version >= "3.11"
+numpy==2.2.6; python_version < "3.11"
+openai==2.14.0
+python_docx==1.1.2
+flask==3.0.3
+# Gradio 前端依赖（app_gradio.py：调用 Flask 后端 REST + SSE 流式）
+# 注：Gradio 5.0 起 Chatbot 默认即为 messages 格式，6.x 移除了 type 参数
+gradio>=5.0
+requests>=2.31.0
+sseclient-py>=1.7.2

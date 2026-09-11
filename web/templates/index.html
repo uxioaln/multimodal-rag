@@ -1,0 +1,1947 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>迪士尼RAG问答助手</title>
+<style>
+    /* 全局样式 */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        color: #333;
+    }
+    .page { display: none; min-height: 100vh; }
+    .page.active { display: block; }
+
+    /* 驾驶舱式 admin 页面：100vh 全屏，不出现页面级滚动 */
+    #page-admin { display: none; height: 100vh; flex-direction: column; }
+    #page-admin.active { display: flex; }
+
+    /* 顶部栏 */
+    .topbar {
+        background: rgba(255,255,255,0.95);
+        padding: 14px 28px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        flex-shrink: 0;
+    }
+    .topbar .logo { font-size: 20px; font-weight: bold; color: #4a3a8c; }
+    .topbar .logo span { color: #ff6b6b; }
+    .btn {
+        cursor: pointer;
+        border: none;
+        border-radius: 6px;
+        padding: 9px 20px;
+        font-size: 14px;
+        transition: all 0.2s;
+        font-family: inherit;
+    }
+    .btn-primary { background: #4a3a8c; color: #fff; }
+    .btn-primary:hover { background: #3a2a7c; }
+    .btn-danger { background: #ff6b6b; color: #fff; }
+    .btn-danger:hover { background: #e85555; }
+    .btn-ghost { background: transparent; border: 1px solid #4a3a8c; color: #4a3a8c; }
+    .btn-ghost:hover { background: #f0eef9; }
+    .btn-logout { background: #888; color: #fff; }
+    .btn-logout:hover { background: #666; }
+    .btn-sm { padding: 6px 14px; font-size: 13px; }
+
+    /* 问答界面（仿微信聊天布局：输入区常驻底部） */
+    .qa-wrap { 
+        max-width: 900px; 
+        margin: 16px auto 0; 
+        padding: 0 20px; 
+        /* 占据 topbar 之外的全部高度，让聊天区在视口内可滚动 */
+        height: calc(100vh - 70px);
+    }
+    .qa-card {
+        background: #fff;
+        border-radius: 12px;
+        padding: 16px 20px 12px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+    }
+    .qa-header { flex-shrink: 0; }
+    .qa-card h2 { color: #4a3a8c; margin-bottom: 4px; }
+    .qa-card .subtitle { color: #888; font-size: 13px; margin-bottom: 10px; }
+    /* 聊天区：占据中间剩余空间，超出滚动 */
+    .qa-history {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 8px 4px 8px 0;
+    }
+    /* 输入行：常驻底部，与聊天区用细分隔线隔开 */
+    .qa-input-row {
+        display: flex;
+        gap: 10px;
+        flex-shrink: 0;
+        border-top: 1px solid #eee;
+        padding-top: 10px;
+        margin-top: 8px;
+    }
+    .qa-input-row input {
+        flex: 1;
+        padding: 12px 14px;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        font-size: 15px;
+        outline: none;
+        font-family: inherit;
+    }
+    .qa-input-row input:focus { border-color: #667eea; }
+    .msg { margin-bottom: 16px; line-height: 1.7; }
+    .msg.user { text-align: right; }
+    .msg .bubble {
+        display: inline-block;
+        padding: 12px 16px;
+        border-radius: 12px;
+        max-width: 80%;
+        text-align: left;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .msg.user .bubble { background: #4a3a8c; color: #fff; }
+    .msg.bot .bubble { background: #f1f1f9; color: #333; }
+    .msg.bot .media { margin-top: 10px; }
+    .msg.bot .media img { max-width: 100%; border-radius: 8px; margin-top: 6px; }
+    .msg.bot .media video { max-width: 100%; border-radius: 8px; margin-top: 6px; }
+    .refs { font-size: 12px; color: #888; margin-top: 8px; border-top: 1px dashed #ccc; padding-top: 6px; }
+    .loading { color: #888; font-style: italic; }
+    .error { color: #c0392b; }
+
+    /* 登录页面 */
+    .login-wrap { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .login-card {
+        background: #fff;
+        padding: 40px 36px;
+        border-radius: 14px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+        width: 380px;
+    }
+    .login-card h2 { text-align: center; color: #4a3a8c; margin-bottom: 8px; }
+    .login-card .sub { text-align: center; color: #888; font-size: 13px; margin-bottom: 26px; }
+    .form-group { margin-bottom: 18px; }
+    .form-group label { display: block; font-size: 14px; color: #555; margin-bottom: 6px; }
+    .form-group input {
+        width: 100%;
+        padding: 11px 14px;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        font-size: 15px;
+        outline: none;
+        font-family: inherit;
+    }
+    .form-group input:focus { border-color: #667eea; }
+    .login-tip { font-size: 12px; color: #999; margin-top: 14px; text-align: center; }
+    .login-actions { display: flex; gap: 10px; margin-top: 22px; }
+    .login-actions .btn { flex: 1; padding: 11px; }
+    .msg-text { font-size: 13px; text-align: center; min-height: 18px; margin-top: 12px; }
+
+    /* 知识库管理页面 - 驾驶舱式全屏布局 */
+    .admin-wrap {
+        max-width: 1400px;
+        width: 100%;
+        margin: 0 auto;
+        padding: 14px 20px;
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;   /* 关键：允许 flex 子项收缩 */
+    }
+
+    .admin-card {
+        background: #fff;
+        border-radius: 12px;
+        padding: 18px 22px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;   /* 关键：允许内部内容区滚动 */
+    }
+    .admin-card h2 { color: #4a3a8c; margin-bottom: 8px; font-size: 16px; flex-shrink: 0; }
+    .admin-card .card-desc { color: #888; font-size: 12px; margin-bottom: 8px; flex-shrink: 0; }
+
+    /* 卡片内部内容区：撑满剩余高度 + 内部滚动 */
+    .card-body {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* 紧凑卡片：用于体检/重建等按钮卡片 */
+    .admin-card.compact {
+        padding: 14px 18px;
+        justify-content: space-between;
+    }
+    .admin-card.compact .card-body {
+        flex: 1;
+        min-height: 0;
+        overflow: visible;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: center;
+        gap: 8px;
+        padding: 8px 0 0;
+    }
+
+    /* 顶部统计栏：固定高度，5个数字一行 */
+    .stats-bar {
+        display: flex;
+        gap: 14px;
+        flex-shrink: 0;
+        margin-bottom: 14px;
+    }
+    .stat-box { flex: 1; background: #f6f4fc; border-radius: 8px; padding: 12px; text-align: center; }
+    .stat-box .num { font-size: 22px; font-weight: bold; color: #4a3a8c; }
+    .stat-box .label { font-size: 12px; color: #888; margin-top: 3px; }
+
+    /* 内容统计条（紧凑版） */
+    .content-stats-bar {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 10px;
+        background: #fff;
+        border-radius: 10px;
+        padding: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        margin-bottom: 14px;
+        flex-shrink: 0;
+    }
+    .content-stats-bar .stat-box { background: #f6f4fc; padding: 8px; }
+    .content-stats-bar .stat-box .num { font-size: 18px; }
+    .content-stats-bar .stat-box .label { font-size: 11px; }
+
+    /* 下方布局：左右两列 grid，左列 2 行、右列 2x2 */
+    .admin-grid {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 14px;
+        flex: 1;
+        min-height: 0;
+        align-items: stretch;
+    }
+    .admin-grid > div {
+        display: grid;
+        gap: 14px;
+        min-height: 0;
+        height: 100%;
+    }
+    /* 左列：上添加 / 下列表 */
+    .admin-grid > div:first-child {
+        grid-template-rows: minmax(0, 1fr) minmax(0, 2fr);
+    }
+    /* 右列：四张操作卡 2x2 对齐 */
+    .admin-grid > div:last-child {
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr;
+    }
+    .admin-grid > div > .admin-card { min-height: 0; height: 100%; display: flex; flex-direction: column; }
+    .admin-grid > div > .admin-card > .card-body { flex: 1; min-height: 0; }
+    /* 右列 2x2 紧凑卡片：内容垂直居中 */
+    .admin-grid > div:last-child > .admin-card.compact > .card-body {
+        flex: 1;
+        overflow: visible;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: center;
+        gap: 8px;
+        padding-top: 8px;
+    }
+    .admin-grid > div:last-child > .admin-card.compact .card-body {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: center;
+        gap: 8px;
+    }
+    .admin-grid > div:last-child > .admin-card.compact .btn {
+        width: 100%;
+        min-width: 0;
+        padding: 8px 12px;
+        font-size: 13px;
+    }
+    .admin-grid > div:last-child > .admin-card.compact .status-badge {
+        margin: 0 auto;
+        display: block;
+        text-align: center;
+        width: max-content;
+    }
+    .admin-grid > div:last-child > .admin-card.compact > h2 { font-size: 15px; }
+    .admin-grid > div:last-child > .admin-card.compact > .card-desc {
+        font-size: 11px;
+        line-height: 1.45;
+        flex: 1;
+    }
+    @media (max-width: 900px) {
+        .admin-grid { grid-template-columns: 1fr; }
+        .admin-grid > div:last-child { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 640px) {
+        .admin-grid > div:last-child { grid-template-columns: 1fr; grid-template-rows: auto; }
+    }
+
+    /* 全局统计卡片 */
+    .stats-module-card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); margin-bottom: 14px; flex-shrink: 0; }
+    .stats-module-card h2 { color: #4a3a8c; margin-bottom: 12px; font-size: 16px; }
+    .stats-module-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+    }
+    .stats-module-box { background: #f6f4fc; border-radius: 8px; padding: 10px; text-align: center; }
+    .stats-module-box .num { font-size: 18px; font-weight: bold; color: #4a3a8c; }
+    .stats-module-box .label { font-size: 11px; color: #888; margin-top: 3px; }
+    .stats-module-detail { margin-top: 12px; }
+    .stats-module-detail table { width: 100%; font-size: 12px; }
+    .stats-module-detail th, .stats-module-detail td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #eee; }
+    .stats-module-detail th { background: #f6f4fc; color: #4a3a8c; }
+
+    .tabs { display: flex; gap: 6px; margin-bottom: 12px; border-bottom: 2px solid #eee; flex-shrink: 0; }
+    .tab { padding: 8px 14px; cursor: pointer; border-bottom: 3px solid transparent; color: #888; font-size: 13px; }
+    .tab.active { color: #4a3a8c; border-bottom-color: #4a3a8c; font-weight: bold; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .add-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .add-row .field { display: flex; flex-direction: column; gap: 4px; }
+    .add-row input[type="text"], .add-row input[type="file"] { padding: 8px 10px; border: 2px solid #ddd; border-radius: 6px; font-size: 13px; font-family: inherit; }
+
+    /* 搜索/筛选栏 */
+    .filter-bar {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        flex-shrink: 0;
+    }
+    .filter-bar input[type="text"], .filter-bar select {
+        padding: 7px 10px;
+        border: 2px solid #ddd;
+        border-radius: 6px;
+        font-size: 13px;
+        font-family: inherit;
+        outline: none;
+    }
+    .filter-bar input[type="text"] { flex: 1; min-width: 180px; }
+    .filter-bar input[type="text"]:focus, .filter-bar select:focus { border-color: #667eea; }
+    .filter-bar .count { color: #888; font-size: 12px; }
+
+    /* 表格：card-body flex:1 自适应撑满 */
+    .table-wrap {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        border: 1px solid #eee;
+        border-radius: 6px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #f6f4fc; color: #4a3a8c; position: sticky; top: 0; z-index: 1; }
+    tr:hover td { background: #faf9ff; }
+
+    /* 类型标签 */
+    .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; }
+    .tag.text { background: #e3f2fd; color: #1565c0; }
+    .tag.image { background: #fce4ec; color: #c2185b; }
+    .tag.video { background: #e8f5e9; color: #2e7d32; }
+    .tag.diverse_question { background: #fff3e0; color: #e65100; }
+    .empty { text-align: center; color: #aaa; padding: 20px; font-size: 13px; }
+
+    /* SSE 日志区：card-body flex:1 自适应撑满 */
+    .sse-log {
+        flex: 1;
+        min-height: 0;
+        background: #f6f4fc;
+        padding: 10px 12px;
+        border-radius: 6px;
+        overflow-y: auto;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: "Consolas", "Monaco", monospace;
+    }
+
+    /* 状态标签 */
+    .status-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+        margin-left: 8px;
+        vertical-align: middle;
+    }
+    /* 重建按钮卡片内的状态标签：换行居中显示在按钮下方 */
+    .admin-card.compact .status-badge {
+        margin: 8px auto 0;
+        display: block;
+        text-align: center;
+        width: max-content;
+    }
+    .status-running { background: #e3f2fd; color: #1565c0; }
+    .status-success { background: #e8f5e9; color: #2e7d32; }
+    .status-error { background: #ffebee; color: #c0392b; }
+    .status-idle { background: #f5f5f5; color: #888; }
+
+    /* 体检/沉淀/统计详情页：100vh 全屏 flex */
+    #page-health, #page-distill, #page-stats {
+        display: none;
+        height: 100vh;
+        flex-direction: column;
+    }
+    #page-health.active, #page-distill.active, #page-stats.active {
+        display: flex;
+    }
+
+    /* 体检详情页：紧凑两列布局，100vh 不滚动 */
+    .health-wrap {
+        max-width: 1200px;
+        width: 100%;
+        margin: 0 auto;
+        padding: 16px 20px;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+    .health-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-shrink: 0;
+    }
+    .health-header h2 { color: #4a3a8c; font-size: 20px; }
+    .health-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        margin-bottom: 12px;
+        flex-shrink: 0;
+    }
+    .health-stat-box {
+        background: #fff;
+        border-radius: 10px;
+        padding: 10px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        text-align: center;
+    }
+    .health-stat-box .num { font-size: 18px; font-weight: bold; color: #4a3a8c; }
+    .health-stat-box .label { font-size: 11px; color: #888; margin-top: 3px; }
+
+    /* 详情页主体：2x2 网格，同行同列高度对齐 */
+    .health-body {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 12px;
+        align-items: stretch;
+    }
+    /* 列容器不参与布局，子卡片直接落入网格 */
+    .health-col { display: contents; }
+
+    /* 固定四宫格位置，避免 display:none 时错位 */
+    .health-result-card,
+    .distill-summary-card { grid-column: 1; grid-row: 1; }
+    .recommendation-list,
+    .distill-list-card { grid-column: 1; grid-row: 2; }
+    .health-body > .health-cost-card,
+    #distill-cost-card { grid-column: 2; grid-row: 1; }
+    .health-log-card { grid-column: 2; grid-row: 2; }
+
+    /* 详情页通用卡片：撑满网格单元格 */
+    .health-panel,
+    .health-result-card,
+    .recommendation-list,
+    .health-cost-card,
+    .health-log-card,
+    .distill-summary-card,
+    .distill-list-card {
+        background: #fff;
+        border-radius: 12px;
+        padding: 14px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+        min-height: 0;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .health-panel > h3,
+    .health-result-card > h3,
+    .recommendation-list > h3,
+    .health-cost-card > h3,
+    .health-log-card > h3,
+    .distill-summary-card > h3,
+    .distill-list-card > h3 {
+        color: #4a3a8c;
+        margin-bottom: 10px;
+        font-size: 14px;
+        flex-shrink: 0;
+    }
+    .health-panel-scroll,
+    .recommendation-list,
+    .distill-list {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+    }
+
+    /* 体检结果卡片（左上） */
+    .score-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+    }
+    .score-box {
+        background: #f6f4fc;
+        border-radius: 8px;
+        padding: 10px 6px;
+        text-align: center;
+    }
+    .score-box .score-title { font-size: 11px; color: #888; margin-bottom: 4px; }
+    .score-box .score-num { font-size: 20px; font-weight: bold; color: #4a3a8c; }
+    .score-box .score-level { font-size: 12px; color: #666; margin-top: 3px; }
+
+    /* 改进建议（左下，内容区滚动） */
+    .dim-block { margin-bottom: 12px; }
+    .dim-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+    }
+    .dim-tag { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: bold; }
+    .dim-tag.dim-完整性 { background: #e3f2fd; color: #1565c0; }
+    .dim-tag.dim-时效性 { background: #fff3e0; color: #e65100; }
+    .dim-tag.dim-一致性 { background: #fce4ec; color: #c2185b; }
+    .dim-count { font-size: 12px; color: #888; }
+    .dim-items { font-size: 12px; color: #555; }
+    .dim-item {
+        display: flex;
+        gap: 8px;
+        padding: 5px 8px;
+        background: #f6f4fc;
+        border-radius: 6px;
+        margin-bottom: 4px;
+    }
+    .dim-item .dim-id { font-weight: bold; color: #4a3a8c; white-space: nowrap; }
+    .dim-item .dim-reason { color: #666; }
+    .dim-empty { font-size: 12px; color: #aaa; padding: 4px 8px; }
+
+    /* 成本追踪（右上） */
+    .cost-info {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px 16px;
+        font-size: 12px;
+        color: #444;
+    }
+    .cost-info span:first-child { color: #888; }
+    .cost-info .cost-note { grid-column: 1 / -1; color: #999; font-size: 11px; margin-top: 4px; }
+
+    /* 执行日志（右下） */
+    .health-log {
+        flex: 1;
+        min-height: 0;
+        background: #f6f4fc;
+        padding: 10px;
+        border-radius: 6px;
+        overflow-y: auto;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: "Consolas", "Monaco", monospace;
+    }
+    @media (max-width: 900px) {
+        .health-body {
+            grid-template-columns: 1fr;
+            grid-template-rows: auto;
+            overflow-y: auto;
+        }
+        .health-col { display: block; }
+        .health-result-card,
+        .distill-summary-card,
+        .recommendation-list,
+        .distill-list-card,
+        .health-body > .health-cost-card,
+        #distill-cost-card,
+        .health-log-card {
+            grid-column: auto;
+            grid-row: auto;
+        }
+    }
+
+    /* 统计页：单卡片撑满主体区域 */
+    .health-body-single {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr);
+    }
+    .health-body-single > .health-cost-card {
+        grid-column: 1;
+        grid-row: 1;
+    }
+    .health-body-single table th {
+        position: sticky;
+        top: 0;
+        background: #f6f4fc;
+        color: #4a3a8c;
+        z-index: 1;
+    }
+    .health-body-single table th,
+    .health-body-single table td {
+        padding: 8px 10px;
+        text-align: left;
+        border-bottom: 1px solid #eee;
+    }
+
+    /* 对话知识沉淀：统计概览 + 结果列表 */
+    .distill-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+    }
+    .distill-stat {
+        background: #f6f4fc;
+        border-radius: 8px;
+        padding: 10px 6px;
+        text-align: center;
+    }
+    .distill-stat .num { font-size: 18px; font-weight: bold; color: #4a3a8c; }
+    .distill-stat .label { font-size: 11px; color: #888; margin-top: 4px; }
+
+    .distill-type-block { margin-bottom: 14px; }
+    .distill-type-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+    }
+    .distill-type-tag {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: bold;
+    }
+    .distill-type-tag.t-事实 { background: #e3f2fd; color: #1565c0; }
+    .distill-type-tag.t-流程 { background: #e8f5e9; color: #2e7d32; }
+    .distill-type-tag.t-注意 { background: #fff3e0; color: #e65100; }
+    .distill-type-tag.t-其他 { background: #f3e5f5; color: #6a1b9a; }
+    .distill-type-count { font-size: 12px; color: #888; }
+    .distill-item {
+        background: #f6f4fc;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 6px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #333;
+    }
+    .distill-item .meta {
+        font-size: 11px;
+        color: #888;
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .distill-item .keywords {
+        margin-top: 6px;
+        font-size: 11px;
+        color: #4a3a8c;
+    }
+    .distill-item .actions {
+        margin-top: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .distill-item .actions .distill-add-msg {
+        font-size: 12px;
+        color: #2e7d32;
+    }
+    .distill-item .actions .distill-add-msg.error {
+        color: #c0392b;
+    }
+    .distill-add-btn.added {
+        opacity: 0.65;
+        cursor: default;
+    }
+</style>
+</head>
+<body>
+
+<!-- ========== 问答界面 ========== -->
+<div class="page active" id="page-qa">
+    <div class="topbar">
+        <div class="logo">迪士尼<span>RAG</span>问答助手</div>
+        <button class="btn btn-ghost" onclick="goLogin()">管理员模式</button>
+    </div>
+    <div class="qa-wrap">
+        <div class="qa-card">
+            <div class="qa-header">
+                <h2>问答助手</h2>
+                <div class="subtitle">输入问题，系统从知识库中找答案，有图就配图，有视频就配视频</div>
+            </div>
+            <div class="qa-history" id="qa-history">
+                <div class="empty">暂无问答记录，开始提问吧</div>
+            </div>
+            <div class="qa-input-row">
+                <input id="qa-input" type="text" placeholder="例如：门票退款流程是什么？最近万圣节活动海报？"
+                       onkeydown="if(event.key==='Enter') askQuestion()">
+                <button class="btn btn-primary" onclick="askQuestion()">提问</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== 登录页面 ========== -->
+<div class="page" id="page-login">
+    <div class="login-wrap">
+        <div class="login-card">
+            <h2>管理员登录</h2>
+            <div class="sub">知识库管理后台</div>
+            <div class="form-group">
+                <label>账号</label>
+                <input id="login-user" type="text" placeholder="请输入账号" onkeydown="if(event.key==='Enter') doLogin()">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input id="login-pwd" type="password" placeholder="请输入密码" onkeydown="if(event.key==='Enter') doLogin()">
+            </div>
+            <div class="login-actions">
+                <button class="btn btn-ghost" onclick="showPage('page-qa')">返回</button>
+                <button class="btn btn-primary" onclick="doLogin()">登录</button>
+            </div>
+            <div class="msg-text" id="login-msg"></div>
+            <div class="login-tip">默认账号：admin / admin123</div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== 知识库管理页面 ========== -->
+<div class="page" id="page-admin">
+    <div class="topbar">
+        <div class="logo">知识库<span>管理</span></div>
+        <button class="btn btn-logout btn-sm" onclick="doLogout()">退出登录</button>
+    </div>
+    <div class="admin-wrap">
+        <!-- 顶部：内容统计（按类型） -->
+        <div class="content-stats-bar">
+            <div class="stat-box"><div class="num" id="stat-text">-</div><div class="label">文本</div></div>
+            <div class="stat-box"><div class="num" id="stat-image">-</div><div class="label">图片</div></div>
+            <div class="stat-box"><div class="num" id="stat-video">-</div><div class="label">视频</div></div>
+            <div class="stat-box"><div class="num" id="stat-diverse">-</div><div class="label">扩展问题</div></div>
+            <div class="stat-box"><div class="num" id="stat-total">-</div><div class="label">总数</div></div>
+        </div>
+
+        <!-- 下面：左右两列 grid 布局 -->
+        <div class="admin-grid">
+            <!-- 左列：新增知识 + 知识条目列表 -->
+            <div>
+                <div class="admin-card">
+                    <h2>添加新内容</h2>
+                    <div class="card-body">
+                        <div class="tabs">
+                            <div class="tab active" onclick="switchTab('doc')">文档</div>
+                            <div class="tab" onclick="switchTab('image')">图片</div>
+                            <div class="tab" onclick="switchTab('video')">视频</div>
+                        </div>
+
+                        <div class="tab-panel active" id="panel-doc">
+                            <div class="add-row">
+                                <div class="field"><label>选择文档</label><input type="file" id="doc-file" accept=".docx"></div>
+                                <button class="btn btn-primary btn-sm" onclick="addKnowledge('doc')">上传</button>
+                            </div>
+                        </div>
+                        <div class="tab-panel" id="panel-image">
+                            <div class="add-row">
+                                <div class="field"><label>选择图片</label><input type="file" id="img-file" accept=".png,.jpg,.jpeg,.gif,.bmp"></div>
+                                <button class="btn btn-primary btn-sm" onclick="addKnowledge('image')">上传</button>
+                            </div>
+                        </div>
+                        <div class="tab-panel" id="panel-video">
+                            <div class="add-row">
+                                <div class="field"><label>视频链接</label><input type="text" id="video-url" placeholder="https://...mp4"></div>
+                                <div class="field"><label>说明</label><input type="text" id="video-desc" placeholder="简单描述视频内容"></div>
+                                <button class="btn btn-primary btn-sm" onclick="addKnowledge('video')">添加</button>
+                            </div>
+                        </div>
+                        <div class="msg-text" id="add-msg"></div>
+                    </div>
+                </div>
+
+                <div class="admin-card">
+                    <h2>内容列表</h2>
+                    <div class="card-body">
+                        <!-- 搜索/筛选栏 -->
+                        <div class="filter-bar">
+                            <input type="text" id="kb-search" placeholder="搜索关键词..." oninput="filterAndRenderKnowledgeList()">
+                            <select id="kb-type-filter" onchange="filterAndRenderKnowledgeList()">
+                                <option value="all">全部</option>
+                                <option value="text">文本</option>
+                                <option value="image">图片</option>
+                                <option value="video">视频</option>
+                                <option value="diverse_question">扩展问题</option>
+                            </select>
+                            <span class="count" id="kb-count">0 / 0</span>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr><th>ID</th><th>类型</th><th>来源</th><th>内容预览</th><th>操作</th></tr>
+                                </thead>
+                                <tbody id="kb-list"><tr><td colspan="5" class="empty">加载中...</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右列：体检 + 重建（紧凑自适应） -->
+            <div>
+                <div class="admin-card compact">
+                    <h2>知识库体检</h2>
+                    <div class="card-desc">检查内容是否完整、有没有过时、是否存在矛盾</div>
+                    <div class="card-body">
+                        <button class="btn btn-primary" id="health-btn" onclick="confirmHealthCheck()">开始体检</button>
+                    </div>
+                </div>
+
+                <div class="admin-card compact">
+                    <h2>重建知识库</h2>
+                    <div class="card-desc">清空当前内容，从原始文档重新生成，耗时较长</div>
+                    <div class="card-body">
+                        <button class="btn btn-danger" id="rebuild-btn" onclick="confirmRebuild()">开始重建</button>
+                        <span class="status-badge status-idle" id="rebuild-status">未开始</span>
+                    </div>
+                </div>
+
+                <div class="admin-card compact">
+                    <h2>沉淀对话知识</h2>
+                    <div class="card-desc">把历史对话提取为结构化知识点，审阅后可决定是否入库</div>
+                    <div class="card-body">
+                        <button class="btn btn-primary" onclick="confirmDistill()">开始沉淀</button>
+                    </div>
+                </div>
+
+                <div class="admin-card compact">
+                    <h2>大模型使用统计</h2>
+                    <div class="card-desc">查看各模块大模型调用次数、Token、耗时与成本汇总</div>
+                    <div class="card-body">
+                        <button class="btn btn-ghost" onclick="showStatsPage()">查看统计</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== 体检执行详情页 ========== -->
+<div class="page" id="page-health">
+    <div class="health-wrap">
+        <div class="health-header">
+            <h2>知识库体检详情</h2>
+            <button class="btn btn-ghost" onclick="backToAdmin()">返回管理页</button>
+        </div>
+
+        <div class="health-stats">
+            <div class="health-stat-box">
+                <div class="num" id="health-status">准备中</div>
+                <div class="label">执行状态</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="health-time">00:00</div>
+                <div class="label">执行时间</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="health-calls">0</div>
+                <div class="label">模型调用次数</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="health-cost">0.000000</div>
+                <div class="label">估算成本（元）</div>
+            </div>
+        </div>
+
+        <!-- 两列主体 -->
+        <div class="health-body">
+            <!-- 左列：体检结果 + 改进建议 -->
+            <div class="health-col">
+                <!-- 结构化结果：分数分级 -->
+                <div class="health-result-card" id="health-result-card" style="display:none;">
+                    <h3>体检结果</h3>
+                    <div class="score-grid">
+                        <div class="score-box">
+                            <div class="score-title">总体健康分</div>
+                            <div class="score-num" id="score-overall">-</div>
+                            <div class="score-level" id="level-overall">-</div>
+                        </div>
+                        <div class="score-box">
+                            <div class="score-title">覆盖率</div>
+                            <div class="score-num" id="score-coverage">-</div>
+                            <div class="score-level" id="level-coverage">-</div>
+                        </div>
+                        <div class="score-box">
+                            <div class="score-title">新鲜度</div>
+                            <div class="score-num" id="score-freshness">-</div>
+                            <div class="score-level" id="level-freshness">-</div>
+                        </div>
+                        <div class="score-box">
+                            <div class="score-title">一致性</div>
+                            <div class="score-num" id="score-consistency">-</div>
+                            <div class="score-level" id="level-consistency">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 改进建议：按维度汇总 -->
+                <div class="recommendation-list" id="recommendation-list" style="display:none;">
+                    <h3>改进建议（按维度汇总）</h3>
+                    <div id="recommendation-content"></div>
+                </div>
+            </div>
+
+            <!-- 右列：成本追踪 + 执行日志 -->
+            <div class="health-col">
+                <!-- 成本追踪明细 -->
+                <div class="health-cost-card" id="health-cost-card" style="display:none;">
+                    <h3>成本追踪</h3>
+                    <div class="cost-info">
+                        <div><span>开始时间：</span><span id="cost-start">-</span></div>
+                        <div><span>结束时间：</span><span id="cost-end">-</span></div>
+                        <div><span>调用次数：</span><span id="cost-calls">0</span></div>
+                        <div><span>输入 Tokens：</span><span id="cost-prompt">0</span></div>
+                        <div><span>输出 Tokens：</span><span id="cost-completion">0</span></div>
+                        <div><span>总 Tokens：</span><span id="cost-total">0</span></div>
+                        <div><span>估算成本：</span><span id="cost-amount">0.000000 元</span></div>
+                        <div class="cost-note" id="cost-note"></div>
+                    </div>
+                </div>
+
+                <div class="health-log-card">
+                    <h3>执行日志</h3>
+                    <pre class="health-log" id="health-detail-log"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== 对话知识沉淀详情页 ========== -->
+<div class="page" id="page-distill">
+    <div class="health-wrap">
+        <div class="health-header">
+            <h2>对话知识沉淀详情</h2>
+            <div>
+                <button class="btn btn-ghost btn-sm" onclick="exportDistill()">导出 jsonl</button>
+                <button class="btn btn-ghost" onclick="backToAdminFromDistill()">返回管理页</button>
+            </div>
+        </div>
+
+        <div class="health-stats">
+            <div class="health-stat-box">
+                <div class="num" id="distill-status">准备中</div>
+                <div class="label">执行状态</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="distill-time">00:00</div>
+                <div class="label">执行时间</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="distill-merged">0</div>
+                <div class="label">合并后知识点</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="distill-cost">0.000000</div>
+                <div class="label">估算成本（元）</div>
+            </div>
+        </div>
+
+        <div class="health-body">
+            <!-- 左列：统计概览 + 沉淀结果列表 -->
+            <div class="health-col">
+                <div class="distill-summary-card" id="distill-summary-card" style="display:none;">
+                    <h3>统计概览</h3>
+                    <div class="distill-summary-grid">
+                        <div class="distill-stat">
+                            <div class="num" id="distill-raw">0</div>
+                            <div class="label">原始候选知识点</div>
+                        </div>
+                        <div class="distill-stat">
+                            <div class="num" id="distill-filtered">0</div>
+                            <div class="label">过滤（需求/问题）</div>
+                        </div>
+                        <div class="distill-stat">
+                            <div class="num" id="distill-extracted">0</div>
+                            <div class="label">参与合并</div>
+                        </div>
+                        <div class="distill-stat">
+                            <div class="num" id="distill-merged-show">0</div>
+                            <div class="label">最终沉淀</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="distill-list-card" id="distill-list-card" style="display:none;">
+                    <h3>沉淀结果（按类型分组）</h3>
+                    <div class="distill-list" id="distill-list"></div>
+                </div>
+            </div>
+
+            <!-- 右列：成本追踪 + 执行日志 -->
+            <div class="health-col">
+                <div class="health-cost-card" id="distill-cost-card" style="display:none;">
+                    <h3>成本追踪</h3>
+                    <div class="cost-info">
+                        <div><span>开始时间：</span><span id="distill-cost-start">-</span></div>
+                        <div><span>结束时间：</span><span id="distill-cost-end">-</span></div>
+                        <div><span>调用次数：</span><span id="distill-cost-calls">0</span></div>
+                        <div><span>输入 Tokens：</span><span id="distill-cost-prompt">0</span></div>
+                        <div><span>输出 Tokens：</span><span id="distill-cost-completion">0</span></div>
+                        <div><span>总 Tokens：</span><span id="distill-cost-total">0</span></div>
+                        <div><span>估算成本：</span><span id="distill-cost-amount">0.000000 元</span></div>
+                        <div class="cost-note" id="distill-cost-note"></div>
+                    </div>
+                </div>
+
+                <div class="health-log-card">
+                    <h3>执行日志</h3>
+                    <pre class="health-log" id="distill-detail-log"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========== 大模型使用统计详情页 ========== -->
+<div class="page" id="page-stats">
+    <div class="health-wrap">
+        <div class="health-header">
+            <h2>大模型使用统计</h2>
+            <button class="btn btn-ghost" onclick="backToAdmin()">返回管理页</button>
+        </div>
+
+        <div class="health-stats">
+            <div class="health-stat-box">
+                <div class="num" id="stats-total-calls">-</div>
+                <div class="label">累计调用</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="stats-total-tokens">-</div>
+                <div class="label">累计 Token</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="stats-total-time">-</div>
+                <div class="label">累计耗时(秒)</div>
+            </div>
+            <div class="health-stat-box">
+                <div class="num" id="stats-total-cost">-</div>
+                <div class="label">累计成本(元)</div>
+            </div>
+        </div>
+
+        <div class="health-body health-body-single">
+            <div class="health-cost-card">
+                <h3>按模块明细</h3>
+                <div class="health-panel-scroll">
+                    <table style="width:100%; font-size:13px;">
+                        <thead>
+                            <tr>
+                                <th>模块</th>
+                                <th>调用次数</th>
+                                <th>输入 Tokens</th>
+                                <th>输出 Tokens</th>
+                                <th>耗时(秒)</th>
+                                <th>成本(元)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stats-module-tbody"><tr><td colspan="6" class="empty">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    /* ===== 页面切换 ===== */
+    function showPage(id) {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    }
+    function goLogin() {
+        // 切换到登录页并清空输入与提示
+        document.getElementById('login-user').value = '';
+        document.getElementById('login-pwd').value = '';
+        document.getElementById('login-msg').textContent = '';
+        showPage('page-login');
+        document.getElementById('login-user').focus();
+    }
+
+    /* ===== 问答功能 ===== */
+    function escapeHtml(s) {
+        return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    function mediaUrl(path) {
+        // 后端 image_path 形如 disney_knowledge_base/images/xxx.jpg，media路由serve的是DOCS_DIR下文件
+        if (!path) return null;
+        return '/media/' + path.replace(/^disney_knowledge_base\/?/, '');
+    }
+
+    function appendUserMsg(text) {
+        const box = document.getElementById('qa-history');
+        const empty = box.querySelector('.empty');
+        if (empty) empty.remove();
+        const div = document.createElement('div');
+        div.className = 'msg user';
+        div.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    function appendBotMsg(data) {
+        const box = document.getElementById('qa-history');
+        const div = document.createElement('div');
+        div.className = 'msg bot';
+        let html = '<div class="bubble">' + escapeHtml(data.answer || '无答案');
+        let media = '';
+        if (data.image_path) {
+            media += '<div class="media"><div style="font-size:12px;color:#888;">相关图片：</div>'
+                   + '<img src="' + mediaUrl(data.image_path) + '" alt="相关图片"></div>';
+        }
+        if (data.video_url) {
+            media += '<div class="media"><div style="font-size:12px;color:#888;">相关视频：</div>'
+                   + '<video src="' + escapeHtml(data.video_url) + '" controls></video></div>';
+        }
+        let refs = '';
+        if (data.references && data.references.length) {
+            refs = '<div class="refs">引用来源：'
+                 + data.references.map(r => escapeHtml(r.source) + '(' + r.similarity + ')').join('；')
+                 + '</div>';
+        }
+        div.innerHTML = html + media + '</div>' + refs;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+    }
+
+    function appendLoading() {
+        const box = document.getElementById('qa-history');
+        const div = document.createElement('div');
+        div.className = 'msg bot loading';
+        div.id = 'loading-msg';
+        div.textContent = '正在检索知识库并生成答案...';
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
+    }
+    function removeLoading() {
+        const el = document.getElementById('loading-msg');
+        if (el) el.remove();
+    }
+
+    async function askQuestion() {
+        const input = document.getElementById('qa-input');
+        const q = input.value.trim();
+        if (!q) return;
+        input.value = '';
+        appendUserMsg(q);
+        appendLoading();
+        try {
+            // 携带访客 UUID（localStorage 持久）+ 本次会话 ID（sessionStorage，浏览器关闭即失效）
+            // 后端用 session_id 把同一会话的多轮对话聚合起来，结束时会话后供 knowledge_distill 抽取
+            const visitorId = getOrCreateVisitorId();
+            const chatSessionId = getOrCreateChatSessionId();
+            const resp = await fetch('/api/ask', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({query: q, visitor_id: visitorId, session_id: chatSessionId})
+            });
+            const data = await resp.json();
+            removeLoading();
+            if (data.code === 0) {
+                appendBotMsg(data.data);
+            } else {
+                const box = document.getElementById('qa-history');
+                const div = document.createElement('div');
+                div.className = 'msg bot error';
+                div.textContent = '查询失败：' + (data.message || '未知错误');
+                box.appendChild(div);
+            }
+        } catch (e) {
+            removeLoading();
+            const box = document.getElementById('qa-history');
+            const div = document.createElement('div');
+            div.className = 'msg bot error';
+            div.textContent = '请求异常：' + e.message;
+            box.appendChild(div);
+        }
+    }
+
+    /* ===== 访客身份：localStorage UUID 区分不同浏览器/无痕模式 ===== */
+    function getOrCreateVisitorId() {
+        let id = localStorage.getItem('visitor_id');
+        if (!id) {
+            // crypto.randomUUID 在现代浏览器可用；老浏览器降级为 v4 风格字符串
+            if (window.crypto && crypto.randomUUID) {
+                id = crypto.randomUUID();
+            } else {
+                id = 'v-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+            }
+            localStorage.setItem('visitor_id', id);
+        }
+        return id;
+    }
+
+    /* ===== 本次聊天的会话 ID：sessionStorage 存储，浏览器关闭即失效
+       这样每次浏览器"新开一页"都是一次独立的会话，前端在 beforeunload / pagehide 时
+       通过 /api/conversation/end 把它标记为 ended，distill 时只抽取已结束的会话 ==== */
+    function getOrCreateChatSessionId() {
+        let id = sessionStorage.getItem('chat_session_id');
+        if (!id) {
+            if (window.crypto && crypto.randomUUID) {
+                id = crypto.randomUUID();
+            } else {
+                id = 's-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+            }
+            sessionStorage.setItem('chat_session_id', id);
+        }
+        return id;
+    }
+
+    /* ===== 把当前会话标记为已结束（settle 到 DB） ===== */
+    function endCurrentChatSession() {
+        const sessionId = sessionStorage.getItem('chat_session_id');
+        if (!sessionId) return;
+        const payload = JSON.stringify({session_id: sessionId});
+        // 优先用 sendBeacon：保证浏览器关闭/刷新时也能发出
+        let sent = false;
+        if (navigator.sendBeacon) {
+            try {
+                const blob = new Blob([payload], {type: 'application/json'});
+                sent = navigator.sendBeacon('/api/conversation/end', blob);
+            } catch (e) { sent = false; }
+        }
+        if (!sent) {
+            // 降级用 keepalive fetch
+            fetch('/api/conversation/end', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: payload,
+                keepalive: true
+            }).catch(() => {});
+        }
+        // 清掉 sessionStorage 里的 session_id，下一次开新页会重新生成
+        sessionStorage.removeItem('chat_session_id');
+    }
+
+    // 浏览器关闭/刷新/切到后台都会触发 settle，避免进行中的会话被遗留在 DB
+    window.addEventListener('pagehide', endCurrentChatSession);
+    window.addEventListener('beforeunload', endCurrentChatSession);
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState === 'hidden') {
+            endCurrentChatSession();
+        }
+    });
+
+    /* ===== 对话知识沉淀 ===== */
+    let distillTimer = null;
+    let distillKnowledgeItems = [];
+    const distillAddedSet = new Set();
+
+    function resetDistillPage() {
+        document.getElementById('distill-status').textContent = '准备中';
+        document.getElementById('distill-status').style.color = '';
+        document.getElementById('distill-time').textContent = '00:00';
+        document.getElementById('distill-merged').textContent = '0';
+        document.getElementById('distill-cost').textContent = '0.000000';
+        document.getElementById('distill-detail-log').textContent = '';
+        document.getElementById('distill-summary-card').style.display = 'none';
+        document.getElementById('distill-list-card').style.display = 'none';
+        document.getElementById('distill-cost-card').style.display = 'none';
+        document.getElementById('distill-list').innerHTML = '';
+        distillKnowledgeItems = [];
+        distillAddedSet.clear();
+    }
+
+    function confirmDistill() {
+        if (!confirm('确定要开始沉淀对话知识吗？\n\n该操作会读取 conversations 表里的全部对话，调用大模型提取并合并知识点，可能产生费用。\n\n是否继续？')) {
+            return;
+        }
+        startDistillDetail();
+    }
+
+    function startDistillDetail() {
+        resetDistillPage();
+        showPage('page-distill');
+
+        const startTime = Date.now();
+        const statusEl = document.getElementById('distill-status');
+        const timeEl = document.getElementById('distill-time');
+        const logEl = document.getElementById('distill-detail-log');
+
+        if (distillTimer) clearInterval(distillTimer);
+        distillTimer = setInterval(() => {
+            timeEl.textContent = formatDuration(Date.now() - startTime);
+        }, 1000);
+
+        const evtSource = new EventSource('/api/knowledge/distill');
+        evtSource.onmessage = function(event) {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'progress') {
+                    logEl.textContent += msg.text + '\n';
+                    logEl.scrollTop = logEl.scrollHeight;
+                } else if (msg.type === 'result') {
+                    logEl.textContent += '\n===== 沉淀完成 =====\n共 ' + (msg.data.merged_count || 0) + ' 条合并后的知识点，请见左侧结果卡片。\n';
+                    logEl.scrollTop = logEl.scrollHeight;
+                    evtSource.close();
+                    clearInterval(distillTimer);
+                    distillTimer = null;
+                    statusEl.textContent = '执行成功';
+                    statusEl.style.color = '#2e7d32';
+                    timeEl.textContent = formatDuration(Date.now() - startTime);
+                    document.getElementById('distill-merged').textContent = msg.data.merged_count || 0;
+                    document.getElementById('distill-cost').textContent = (msg.data.cost.estimated_cost || 0).toFixed(6);
+                    renderDistillResult(msg.data);
+                    renderDistillCost(msg.data.cost);
+                } else if (msg.type === 'error') {
+                    logEl.textContent += '\n[错误] ' + msg.text + '\n';
+                    logEl.scrollTop = logEl.scrollHeight;
+                    evtSource.close();
+                    clearInterval(distillTimer);
+                    distillTimer = null;
+                    statusEl.textContent = '执行失败';
+                    statusEl.style.color = '#c0392b';
+                    timeEl.textContent = formatDuration(Date.now() - startTime);
+                }
+            } catch (e) {
+                logEl.textContent += event.data + '\n';
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+        };
+        evtSource.onerror = function() {
+            logEl.textContent += '\n[错误] SSE 连接异常或已关闭';
+            logEl.scrollTop = logEl.scrollHeight;
+            evtSource.close();
+            clearInterval(distillTimer);
+            distillTimer = null;
+            statusEl.textContent = '执行失败';
+            statusEl.style.color = '#c0392b';
+            timeEl.textContent = formatDuration(Date.now() - startTime);
+        };
+    }
+
+    function renderDistillResult(data) {
+        // 统计概览
+        document.getElementById('distill-raw').textContent = data.raw_count || 0;
+        document.getElementById('distill-filtered').textContent = data.filtered_count || 0;
+        document.getElementById('distill-extracted').textContent = data.extracted_count || 0;
+        document.getElementById('distill-merged-show').textContent = data.merged_count || 0;
+        document.getElementById('distill-summary-card').style.display = '';
+
+        // 按类型分组
+        const items = data.merged_knowledge || [];
+        distillKnowledgeItems = items.slice();
+        const grouped = {};
+        for (let i = 0; i < items.length; i++) {
+            const k = items[i];
+            k._distillIdx = i;
+            const t = k.knowledge_type || '其他';
+            if (!grouped[t]) grouped[t] = [];
+            grouped[t].push(k);
+        }
+        const listEl = document.getElementById('distill-list');
+        if (!items.length) {
+            listEl.innerHTML = '<div class="empty">无可沉淀的知识点</div>';
+        } else {
+            // 稳定排序：先按频次倒序，再按置信度倒序
+            const orderedTypes = Object.keys(grouped).sort((a, b) => grouped[b].length - grouped[a].length);
+            listEl.innerHTML = orderedTypes.map(kt => {
+                const arr = grouped[kt].sort((x, y) => {
+                    const fx = x.frequency || 1, fy = y.frequency || 1;
+                    if (fx !== fy) return fy - fx;
+                    return (y.confidence || 0) - (x.confidence || 0);
+                });
+                const innerHtml = arr.map(k => {
+                    const kwArr = (k.keywords || []).slice(0, 8);
+                    const idx = k._distillIdx;
+                    const added = distillAddedSet.has(idx);
+                    return '<div class="distill-item">'
+                         + escapeHtml(k.content || '')
+                         + '<div class="meta">'
+                         + '<span>置信度 ' + (k.confidence != null ? k.confidence : '-') + '</span>'
+                         + '<span>频次 ' + (k.frequency || 1) + '</span>'
+                         + '<span>分类 ' + escapeHtml(k.category || '-') + '</span>'
+                         + '</div>'
+                         + (kwArr.length ? '<div class="keywords">关键词：' + kwArr.map(escapeHtml).join('、') + '</div>' : '')
+                         + '<div class="actions">'
+                         + '<button class="btn btn-primary btn-sm distill-add-btn' + (added ? ' added' : '') + '"'
+                         + ' data-idx="' + idx + '"'
+                         + (added ? ' disabled' : '')
+                         + ' onclick="addDistillToKb(' + idx + ')">'
+                         + (added ? '已添加' : '添加进知识库')
+                         + '</button>'
+                         + '<span class="distill-add-msg" id="distill-add-msg-' + idx + '"></span>'
+                         + '</div>'
+                         + '</div>';
+                }).join('');
+                return '<div class="distill-type-block">'
+                     + '<div class="distill-type-header">'
+                     + '<span class="distill-type-tag t-' + escapeHtml(kt) + '">' + escapeHtml(kt) + '</span>'
+                     + '<span class="distill-type-count">共 ' + arr.length + ' 条</span>'
+                     + '</div>' + innerHtml + '</div>';
+            }).join('');
+        }
+        document.getElementById('distill-list-card').style.display = '';
+    }
+
+    async function addDistillToKb(idx) {
+        const k = distillKnowledgeItems[idx];
+        if (!k) return;
+        const btn = document.querySelector('.distill-add-btn[data-idx="' + idx + '"]');
+        const msgEl = document.getElementById('distill-add-msg-' + idx);
+        if (!btn || btn.disabled) return;
+
+        btn.disabled = true;
+        btn.textContent = '添加中...';
+        if (msgEl) {
+            msgEl.textContent = '';
+            msgEl.classList.remove('error');
+        }
+
+        try {
+            const resp = await fetch('/api/knowledge/distill/add', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    content: k.content || '',
+                    knowledge_type: k.knowledge_type || '',
+                    category: k.category || '',
+                }),
+            });
+            const data = await resp.json();
+            if (data.code === 0) {
+                distillAddedSet.add(idx);
+                btn.textContent = '已添加';
+                btn.classList.add('added');
+                if (msgEl) msgEl.textContent = data.message || '添加成功';
+            } else {
+                btn.disabled = false;
+                btn.textContent = '添加进知识库';
+                if (msgEl) {
+                    msgEl.textContent = data.message || '添加失败';
+                    msgEl.classList.add('error');
+                }
+            }
+        } catch (e) {
+            btn.disabled = false;
+            btn.textContent = '添加进知识库';
+            if (msgEl) {
+                msgEl.textContent = '请求异常：' + e.message;
+                msgEl.classList.add('error');
+            }
+        }
+    }
+
+    function renderDistillCost(cost) {
+        if (!cost) return;
+        document.getElementById('distill-cost-start').textContent = cost.start_time || '-';
+        document.getElementById('distill-cost-end').textContent = cost.end_time || '-';
+        document.getElementById('distill-cost-calls').textContent = cost.call_count || 0;
+        document.getElementById('distill-cost-prompt').textContent = cost.prompt_tokens || 0;
+        document.getElementById('distill-cost-completion').textContent = cost.completion_tokens || 0;
+        document.getElementById('distill-cost-total').textContent = cost.total_tokens || 0;
+        document.getElementById('distill-cost-amount').textContent = (cost.estimated_cost || 0).toFixed(6) + ' 元';
+        document.getElementById('distill-cost-note').textContent = cost.cost_note || '';
+        document.getElementById('distill-cost-card').style.display = '';
+    }
+
+    function backToAdminFromDistill() {
+        if (distillTimer) {
+            clearInterval(distillTimer);
+            distillTimer = null;
+        }
+        showPage('page-admin');
+    }
+
+    function exportDistill() {
+        window.location.href = '/api/knowledge/distill/export';
+    }
+
+    /* ===== 登录功能 ===== */
+    async function doLogin() {
+        const username = document.getElementById('login-user').value.trim();
+        const password = document.getElementById('login-pwd').value;
+        const msgEl = document.getElementById('login-msg');
+        msgEl.style.color = '#888';
+        msgEl.textContent = '登录中...';
+        try {
+            const resp = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const data = await resp.json();
+            if (data.code === 0) {
+                msgEl.style.color = '#2e7d32';
+                msgEl.textContent = '登录成功，正在进入知识库管理...';
+                showPage('page-admin');
+                loadKnowledgeList();
+            } else {
+                msgEl.style.color = '#c0392b';
+                msgEl.textContent = data.message || '登录失败';
+            }
+        } catch (e) {
+            msgEl.style.color = '#c0392b';
+            msgEl.textContent = '请求异常：' + e.message;
+        }
+    }
+
+    async function doLogout() {
+        await fetch('/api/logout', {method: 'POST'});
+        showPage('page-qa');
+    }
+
+    /* ===== 知识库管理 ===== */
+    function switchTab(type) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        const tabMap = {doc: 0, image: 1, video: 2};
+        document.querySelectorAll('.tab')[tabMap[type]].classList.add('active');
+        document.getElementById('panel-' + type).classList.add('active');
+    }
+
+    // 全局变量：缓存从后端拉取的所有知识条目（用于客户端搜索/筛选，避免重复请求）
+    let allKnowledgeItems = [];
+
+    // 从 allKnowledgeItems 重新计算各类型统计，更新顶部内容统计条
+    function renderStats() {
+        const stats = {text: 0, image: 0, video: 0, diverse_question: 0, total: allKnowledgeItems.length};
+        for (const it of allKnowledgeItems) {
+            if (stats[it.type] !== undefined) stats[it.type]++;
+        }
+        document.getElementById('stat-text').textContent = stats.text;
+        document.getElementById('stat-image').textContent = stats.image;
+        document.getElementById('stat-video').textContent = stats.video;
+        document.getElementById('stat-diverse').textContent = stats.diverse_question;
+        document.getElementById('stat-total').textContent = stats.total;
+    }
+
+    // 渲染指定条目列表到表格
+    function renderKnowledgeList(items) {
+        const tbody = document.getElementById('kb-list');
+        const countEl = document.getElementById('kb-count');
+        countEl.textContent = items.length + ' / ' + allKnowledgeItems.length;
+        if (!items.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="empty">没有匹配的知识条目</td></tr>';
+            return;
+        }
+        tbody.innerHTML = items.map(it => {
+            const tag = '<span class="tag ' + it.type + '">' + it.type + '</span>';
+            return '<tr>'
+                + '<td>' + it.id + '</td>'
+                + '<td>' + tag + '</td>'
+                + '<td>' + escapeHtml(it.source) + '</td>'
+                + '<td>' + escapeHtml(it.content_preview) + '</td>'
+                + '<td><button class="btn btn-danger btn-sm" onclick="deleteItem(' + it.id + ')">删除</button></td>'
+                + '</tr>';
+        }).join('');
+    }
+
+    // 根据搜索框 + 类型筛选条，过滤后渲染
+    function filterAndRenderKnowledgeList() {
+        const keyword = (document.getElementById('kb-search').value || '').trim().toLowerCase();
+        const typeFilter = document.getElementById('kb-type-filter').value;
+        let filtered = allKnowledgeItems;
+        if (typeFilter !== 'all') {
+            filtered = filtered.filter(it => it.type === typeFilter);
+        }
+        if (keyword) {
+            filtered = filtered.filter(it =>
+                (it.source || '').toLowerCase().includes(keyword) ||
+                (it.content_preview || '').toLowerCase().includes(keyword)
+            );
+        }
+        renderKnowledgeList(filtered);
+    }
+
+    async function loadKnowledgeList() {
+        try {
+            const resp = await fetch('/api/knowledge/list');
+            const data = await resp.json();
+            if (data.code !== 0) {
+                if (resp.status === 401) { showPage('page-login'); }
+                return;
+            }
+            // 缓存到全局 + 渲染统计
+            allKnowledgeItems = data.data.items || [];
+            renderStats();
+            // 重新走一次过滤渲染（保持当前搜索/筛选条件）
+            filterAndRenderKnowledgeList();
+        } catch (e) {
+            document.getElementById('kb-list').innerHTML = '<tr><td colspan="5" class="empty">加载失败：' + escapeHtml(e.message) + '</td></tr>';
+        }
+    }
+
+    /* ===== 全局大模型使用统计 ===== */
+    async function loadGlobalStats() {
+        try {
+            const resp = await fetch('/api/stats');
+            if (resp.status === 401) {
+                if (document.getElementById('stats-module-tbody')) {
+                    document.getElementById('stats-module-tbody').innerHTML = '<tr><td colspan="6" class="empty">未登录，无法加载</td></tr>';
+                }
+                return;
+            }
+            const data = await resp.json();
+            const total = data.total || {};
+            document.getElementById('stats-total-calls').textContent = total.call_count || 0;
+            document.getElementById('stats-total-tokens').textContent = (total.total_tokens || 0).toLocaleString();
+            document.getElementById('stats-total-time').textContent = total.total_duration_seconds || 0;
+            document.getElementById('stats-total-cost').textContent = (total.estimated_cost || 0).toFixed(6);
+
+            const tbody = document.getElementById('stats-module-tbody');
+            const byModule = data.by_module || {};
+            const modules = Object.keys(byModule);
+            if (!tbody) return;
+            if (!modules.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无调用记录</td></tr>';
+                return;
+            }
+            tbody.innerHTML = modules.map(name => {
+                const m = byModule[name];
+                return '<tr>'
+                    + '<td>' + escapeHtml(name) + '</td>'
+                    + '<td>' + (m.call_count || 0) + '</td>'
+                    + '<td>' + (m.prompt_tokens || 0).toLocaleString() + '</td>'
+                    + '<td>' + (m.completion_tokens || 0).toLocaleString() + '</td>'
+                    + '<td>' + (m.total_duration_seconds || 0) + '</td>'
+                    + '<td>' + (m.estimated_cost || 0).toFixed(6) + '</td>'
+                    + '</tr>';
+            }).join('');
+        } catch (e) {
+            const tbody = document.getElementById('stats-module-tbody');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="empty">加载失败</td></tr>';
+        }
+    }
+
+    /* ===== 跳转到统计详情页 ===== */
+    function showStatsPage() {
+        showPage('page-stats');
+        loadGlobalStats();
+    }
+
+    async function addKnowledge(type) {
+        const msgEl = document.getElementById('add-msg');
+        msgEl.style.color = '#888';
+        msgEl.textContent = '正在入库，请稍候...';
+        const fd = new FormData();
+        fd.append('type', type);
+        try {
+            if (type === 'doc') {
+                const f = document.getElementById('doc-file').files[0];
+                if (!f) { msgEl.style.color = '#c0392b'; msgEl.textContent = '请选择docx文档'; return; }
+                fd.append('file', f);
+            } else if (type === 'image') {
+                const f = document.getElementById('img-file').files[0];
+                if (!f) { msgEl.style.color = '#c0392b'; msgEl.textContent = '请选择图片'; return; }
+                fd.append('file', f);
+            } else if (type === 'video') {
+                const url = document.getElementById('video-url').value.trim();
+                const desc = document.getElementById('video-desc').value.trim();
+                if (!url) { msgEl.style.color = '#c0392b'; msgEl.textContent = '请填写视频URL'; return; }
+                fd.append('url', url);
+                fd.append('description', desc);
+            }
+            const resp = await fetch('/api/knowledge/add', {method: 'POST', body: fd});
+            const data = await resp.json();
+            if (data.code === 0) {
+                msgEl.style.color = '#2e7d32';
+                msgEl.textContent = data.message || '入库成功';
+                // 清空输入
+                if (type === 'doc') document.getElementById('doc-file').value = '';
+                if (type === 'image') document.getElementById('img-file').value = '';
+                if (type === 'video') { document.getElementById('video-url').value = ''; document.getElementById('video-desc').value = ''; }
+                loadKnowledgeList();
+            } else {
+                msgEl.style.color = '#c0392b';
+                msgEl.textContent = data.message || '入库失败';
+            }
+        } catch (e) {
+            msgEl.style.color = '#c0392b';
+            msgEl.textContent = '请求异常：' + e.message;
+        }
+    }
+
+    async function deleteItem(id) {
+        if (!confirm('确认删除ID为 ' + id + ' 的知识条目吗？')) return;
+        try {
+            const resp = await fetch('/api/knowledge/delete?id=' + id, {method: 'DELETE'});
+            const data = await resp.json();
+            if (data.code === 0) {
+                loadKnowledgeList();
+            } else {
+                alert(data.message || '删除失败');
+            }
+        } catch (e) {
+            alert('请求异常：' + e.message);
+        }
+    }
+
+    /* ===== 健康检查：确认后跳转到详情页执行 ===== */
+    let healthCheckTimer = null;
+
+    function formatDuration(ms) {
+        const totalSeconds = Math.floor(ms / 1000);
+        const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+        const s = (totalSeconds % 60).toString().padStart(2, '0');
+        return m + ':' + s;
+    }
+
+    function confirmHealthCheck() {
+        if (!confirm('开始知识库体检？\n\n该操作会调用大模型分析当前知识内容，耗时几十秒到几分钟。')) {
+            return;
+        }
+        startHealthCheckDetail();
+    }
+
+    function resetHealthDetailPage() {
+        document.getElementById('health-status').textContent = '执行中';
+        document.getElementById('health-status').style.color = '#1565c0';
+        document.getElementById('health-time').textContent = '00:00';
+        document.getElementById('health-calls').textContent = '0';
+        document.getElementById('health-cost').textContent = '0.000000';
+        document.getElementById('health-detail-log').textContent = '正在连接服务...\n';
+        document.getElementById('health-result-card').style.display = 'none';
+        document.getElementById('health-cost-card').style.display = 'none';
+        document.getElementById('recommendation-list').style.display = 'none';
+        document.getElementById('recommendation-content').innerHTML = '';
+    }
+
+    function renderHealthResult(data) {
+        // 显示结构化结果卡片
+        document.getElementById('health-result-card').style.display = 'block';
+        const overall = data['总体健康分'] || {};
+        const coverage = data['覆盖率'] || {};
+        const freshness = data['新鲜度'] || {};
+        const consistency = data['一致性'] || {};
+
+        document.getElementById('score-overall').textContent = overall['分数_10分制'] !== undefined ? overall['分数_10分制'] : '-';
+        document.getElementById('level-overall').textContent = overall['等级描述'] || '-';
+        document.getElementById('score-coverage').textContent = coverage['分数_10分制'] !== undefined ? coverage['分数_10分制'] : '-';
+        document.getElementById('level-coverage').textContent = coverage['等级描述'] || '-';
+        document.getElementById('score-freshness').textContent = freshness['分数_10分制'] !== undefined ? freshness['分数_10分制'] : '-';
+        document.getElementById('level-freshness').textContent = freshness['等级描述'] || '-';
+        document.getElementById('score-consistency').textContent = consistency['分数_10分制'] !== undefined ? consistency['分数_10分制'] : '-';
+        document.getElementById('level-consistency').textContent = consistency['等级描述'] || '-';
+
+        // 改进建议：按维度（完整性/时效性/一致性）汇总展示
+        const recList = data['改进建议'] || [];
+        const recWrap = document.getElementById('recommendation-list');
+        const recContent = document.getElementById('recommendation-content');
+        if (recList.length) {
+            recWrap.style.display = 'block';
+            recContent.innerHTML = recList.map(dim => {
+                const name = dim['维度'] || '';
+                const count = dim['建议条数'] || 0;
+                const items = dim['涉及知识点'] || [];
+                let itemsHtml;
+                if (!items.length) {
+                    itemsHtml = '<div class="dim-empty">该维度未检出问题</div>';
+                } else {
+                    itemsHtml = items.map(it =>
+                        '<div class="dim-item">'
+                        + '<span class="dim-id">' + escapeHtml(it['条目ID'] || '') + '</span>'
+                        + '<span class="dim-reason">' + escapeHtml(it['原因'] || '') + '</span>'
+                        + '</div>'
+                    ).join('');
+                }
+                return '<div class="dim-block">'
+                    + '<div class="dim-header">'
+                    + '<span class="dim-tag dim-' + name + '">' + name + '</span>'
+                    + '<span class="dim-count">建议更改 ' + count + ' 条</span>'
+                    + '</div>'
+                    + '<div class="dim-items">' + itemsHtml + '</div>'
+                    + '</div>';
+            }).join('');
+        } else {
+            recWrap.style.display = 'none';
+        }
+    }
+
+    function renderHealthCost(cost) {
+        // 显示成本追踪卡片
+        document.getElementById('health-cost-card').style.display = 'block';
+        document.getElementById('cost-start').textContent = cost.start_time ? formatDateTime(cost.start_time) : '-';
+        document.getElementById('cost-end').textContent = cost.end_time ? formatDateTime(cost.end_time) : '-';
+        document.getElementById('cost-calls').textContent = cost.llm_call_count || 0;
+        document.getElementById('cost-prompt').textContent = cost.prompt_tokens || 0;
+        document.getElementById('cost-completion').textContent = cost.completion_tokens || 0;
+        document.getElementById('cost-total').textContent = cost.total_tokens || 0;
+        document.getElementById('cost-amount').textContent = (cost.estimated_cost || 0).toFixed(6) + ' ' + (cost.cost_unit || '元');
+        document.getElementById('cost-note').textContent = cost.cost_note || '';
+    }
+
+    function formatDateTime(isoString) {
+        const d = new Date(isoString);
+        if (isNaN(d.getTime())) return isoString;
+        const pad = n => n.toString().padStart(2, '0');
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+            + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function startHealthCheckDetail() {
+        resetHealthDetailPage();
+        showPage('page-health');
+
+        const startTime = Date.now();
+        const timeEl = document.getElementById('health-time');
+        const statusEl = document.getElementById('health-status');
+        const callsEl = document.getElementById('health-calls');
+        const costEl = document.getElementById('health-cost');
+        const logEl = document.getElementById('health-detail-log');
+
+        // 启动计时器
+        if (healthCheckTimer) clearInterval(healthCheckTimer);
+        healthCheckTimer = setInterval(() => {
+            timeEl.textContent = formatDuration(Date.now() - startTime);
+        }, 1000);
+
+        const evtSource = new EventSource('/api/knowledge/health');
+        evtSource.onmessage = function(event) {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'progress') {
+                    logEl.textContent += msg.text + '\n';
+                    logEl.scrollTop = logEl.scrollHeight;
+                } else if (msg.type === 'result') {
+                    logEl.textContent += '\n===== 体检完成 =====\n已生成结构化结果与成本明细，请见上方卡片。';
+                    logEl.scrollTop = logEl.scrollHeight;
+                    evtSource.close();
+                    clearInterval(healthCheckTimer);
+                    healthCheckTimer = null;
+                    statusEl.textContent = '执行成功';
+                    statusEl.style.color = '#2e7d32';
+                    timeEl.textContent = formatDuration(Date.now() - startTime);
+
+                    const data = msg.data || {};
+                    renderHealthResult(data);
+
+                    const cost = data['成本追踪'] || {};
+                    callsEl.textContent = cost.llm_call_count || 0;
+                    costEl.textContent = (cost.estimated_cost || 0).toFixed(6);
+                    renderHealthCost(cost);
+                } else if (msg.type === 'error') {
+                    logEl.textContent += '\n[错误] ' + msg.text + '\n';
+                    logEl.scrollTop = logEl.scrollHeight;
+                    evtSource.close();
+                    clearInterval(healthCheckTimer);
+                    healthCheckTimer = null;
+                    statusEl.textContent = '执行失败';
+                    statusEl.style.color = '#c0392b';
+                    timeEl.textContent = formatDuration(Date.now() - startTime);
+                }
+            } catch (e) {
+                logEl.textContent += event.data + '\n';
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+        };
+        evtSource.onerror = function() {
+            logEl.textContent += '\n[错误] SSE 连接异常或已关闭';
+            evtSource.close();
+            clearInterval(healthCheckTimer);
+            healthCheckTimer = null;
+            statusEl.textContent = '执行失败';
+            statusEl.style.color = '#c0392b';
+            timeEl.textContent = formatDuration(Date.now() - startTime);
+        };
+    }
+
+    function backToAdmin() {
+        if (healthCheckTimer) {
+            clearInterval(healthCheckTimer);
+            healthCheckTimer = null;
+        }
+        showPage('page-admin');
+    }
+
+    /* ===== 重建知识库：确认 + SSE 流式 + 状态标签 ===== */
+    function confirmRebuild() {
+        if (!confirm('确定要清空当前知识库并从原始文档重新生成吗？\n\n该操作会清空全部已有内容，然后从原始文档重新生成，耗时较长。\n\n是否继续？')) {
+            return;
+        }
+        runRebuildWithStatus();
+    }
+
+    function runRebuildWithStatus() {
+        const btn = document.getElementById('rebuild-btn');
+        const statusEl = document.getElementById('rebuild-status');
+        btn.disabled = true;
+        statusEl.textContent = '执行中';
+        statusEl.className = 'status-badge status-running';
+
+        const evtSource = new EventSource('/api/knowledge/rebuild');
+        evtSource.onmessage = function(event) {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'progress') {
+                    statusEl.textContent = '执行中';
+                    statusEl.className = 'status-badge status-running';
+                } else if (msg.type === 'result') {
+                    evtSource.close();
+                    btn.disabled = false;
+                    statusEl.textContent = '执行成功';
+                    statusEl.className = 'status-badge status-success';
+                    // 重建完成后刷新知识库列表与统计
+                    loadKnowledgeList();
+                } else if (msg.type === 'error') {
+                    evtSource.close();
+                    btn.disabled = false;
+                    statusEl.textContent = '执行失败';
+                    statusEl.className = 'status-badge status-error';
+                }
+            } catch (e) {
+                statusEl.textContent = '执行中';
+            }
+        };
+        evtSource.onerror = function() {
+            evtSource.close();
+            btn.disabled = false;
+            statusEl.textContent = '执行失败';
+            statusEl.className = 'status-badge status-error';
+        };
+    }
+
+    /* ===== 初始化：检查登录态 ===== */
+    (async function init() {
+        try {
+            const resp = await fetch('/api/login_status');
+            const data = await resp.json();
+            if (data.code === 0 && data.data.logged_in) {
+                // 已登录直接进管理页（但默认仍展示问答页，保持问答为入口）
+                // 用户点击管理员模式后应直接进入管理页
+            }
+        } catch (e) {}
+    })();
+</script>
+</body>
+</html>

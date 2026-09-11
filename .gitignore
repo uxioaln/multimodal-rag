@@ -1,0 +1,63 @@
+# ========== Python ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+sdist/
+develop-eggs/
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ========== 虚拟环境 ==========
+venv/
+.venv/
+env/
+ENV/
+
+# ========== 环境变量与密钥 ==========
+.env
+.env.*
+!.env.example
+
+# ========== 运行时数据 ==========
+# 向量数据库存储（Qdrant 本地持久化 + 服务端模式数据）
+data/qdrant/
+data/qdrant_storage/
+# 向量索引与增量检测文件
+data/indexes/
+# SQLite 用户数据库
+data/db/
+# 统计与基准测试数据
+data/stats/
+
+# ========== 编辑器与IDE ==========
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ========== 操作系统 ==========
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========== Docker ==========
+# 不排除 Dockerfile、docker-compose.yml 等编排文件
+docker/data/
+
+# ========== 测试与覆盖率 ==========
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+.mypy_cache/

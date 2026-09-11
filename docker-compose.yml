@@ -1,0 +1,73 @@
+# 多模态数据处理 RAG - Docker Compose 编排
+#
+# 一键启动：
+#   docker compose up -d --build
+# 查看应用日志：
+#   docker compose logs -f app
+# 停止服务：
+#   docker compose down
+#
+# 数据持久化：所有运行时数据均挂载到宿主机 ./data 下的子目录，
+# 重建容器不会丢失向量数据、源文档、用户数据与统计信息。
+#
+# 说明：
+# - app 服务通过 QDRANT_URL=http://qdrant:6333 连接独立的 Qdrant 服务端
+#   （本地运行时不设置 QDRANT_URL，仍使用 data/qdrant 本地持久化模式）。
+# - 首次启动若 Qdrant collection 为空，应用容器会自动构建向量索引
+#   （调用云端 embedding API，会产生费用）。
+
+services:
+  # ========== 向量数据库 ==========
+  qdrant:
+    # 固定版本避免 latest 标签漂移导致行为不一致
+    image: qdrant/qdrant:v1.17.0
+    container_name: disney-rag-qdrant
+    ports:
+      - "6333:6333"  # REST API 与 Web UI（dashboard 访问 http://localhost:6333/dashboard）
+      - "6334:6334"  # gRPC API（可选）
+    volumes:
+      # 持久化 Qdrant 数据（collection、向量、WAL）
+      - ./data/qdrant_storage:/qdrant/storage
+    # 健康检查：REST 端口可连通即视为就绪
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ========== Flask 应用 ==========
+  app:
+    build: .
+    container_name: disney-rag-app
+    ports:
+      - "5050:5050"
+    env_file:
+      - .env
+    environment:
+      # 连接同一 compose 网络内的 qdrant 服务（覆盖本地持久化模式）
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      # ========== 源码挂载（开发模式） ==========
+      # 将宿主机源码目录挂载到容器内，修改代码后无需重建镜像，
+      # 只需重启容器（docker compose restart app）即可生效。
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./web:/app/web
+      - ./run.py:/app/run.py
+      # ========== 数据持久化 ==========
+      # 源文档（docx / 图片），便于在不重建镜像的情况下增删知识库内容
+      - ./data/knowledge_base:/app/data/knowledge_base
+      # SQLite 用户数据（账号、对话、会话生命周期）
+      - ./data/db:/app/data/db
+      # 增量检测所需的 doc_hashes，重建容器后保留
+      - ./data/indexes:/app/data/indexes
+      # 大模型调用成本统计
+      - ./data/stats:/app/data/stats
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    # 启动入口：等待 Qdrant -> 初始化数据库 -> 必要时构建索引 -> 启动 Flask
+    command: ["sh", "scripts/docker-entrypoint.sh"]
+    restart: unless-stopped
