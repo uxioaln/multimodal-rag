@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 dashscope.api_key = DASHSCOPE_API_KEY
 
 # chat LLM 统一走 agicto 平台，使用 deepseek-v4-flash（基于中文训练、性价比高）
-# embedding 仍走 DASHSCOPE 多模态（tongyi-embedding-vision-plus）
+# embedding 仍走 DASHSCOPE 多模态（tongyi-embedding-vision-plus，AGICTO 兼容接口不支持该模型）
 client = OpenAI(
     api_key=AGICTO_API_KEY,
     base_url=CHAT_BASE_URL

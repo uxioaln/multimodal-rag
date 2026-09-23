@@ -61,7 +61,7 @@ CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
 # ========== 模型与服务 ==========
-# 多模态 embedding（DashScope 平台）
+# 多模态 embedding（DashScope 平台，AGICTO OpenAI 兼容接口不支持该模型）
 MULTIMODAL_EMBEDDING_MODEL = "tongyi-embedding-vision-plus"
 
 # Chat LLM（AGICTO 平台，基于中文训练的性价比模型）
@@ -76,9 +76,8 @@ IMAGE_KEYWORDS = ["图片", "海报", "照片", "看看", "长什么样", "图"]
 VIDEO_KEYWORDS = ["视频", "录像", "影片", "看一下", "播放"]
 
 # ========== 环境变量读取（fail-fast） ==========
+# DashScope API Key 已改为可选（embedding 和 OCR 均已迁移至 AGICTO 平台）
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
-if not DASHSCOPE_API_KEY:
-    raise ValueError("错误：请设置 'DASHSCOPE_API_KEY' 环境变量（用于多模态 embedding）。")
 
 AGICTO_API_KEY = os.getenv("AGICTO_API_KEY")
 if not AGICTO_API_KEY:

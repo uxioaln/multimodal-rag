@@ -17,7 +17,7 @@ import secrets
 from flask import Flask, send_from_directory
 
 from app.config import DOCS_DIR
-from app.api import auth_bp, ask_bp, knowledge_bp, stats_bp, conversation_bp
+from app.api import auth_bp, ask_bp, knowledge_bp, stats_bp, conversation_bp, agent_bp
 
 
 # 工程根目录：app/ 的父目录
@@ -48,6 +48,7 @@ def create_app() -> Flask:
     app.register_blueprint(knowledge_bp)
     app.register_blueprint(stats_bp)
     app.register_blueprint(conversation_bp)
+    app.register_blueprint(agent_bp)
 
     @app.route("/")
     def index():

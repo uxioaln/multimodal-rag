@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>迪士尼RAG问答助手</title>
+<title>迪士尼Agent问答助手</title>
 <style>
     /* 全局样式 */
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -685,6 +685,78 @@
         opacity: 0.65;
         cursor: default;
     }
+
+    /* ===== Agent 专属样式 ===== */
+    .agent-panel {
+        margin-top: 10px;
+        border-top: 1px dashed #ccc;
+        padding-top: 8px;
+        font-size: 12px;
+    }
+    .agent-panel summary {
+        cursor: pointer;
+        color: #4a3a8c;
+        font-weight: bold;
+        user-select: none;
+    }
+    .agent-panel summary:hover { color: #667eea; }
+    .agent-plan {
+        margin: 6px 0;
+        padding: 6px 10px;
+        background: #f6f4fc;
+        border-radius: 6px;
+    }
+    .agent-plan .plan-intent { color: #4a3a8c; font-weight: bold; margin-bottom: 4px; }
+    .agent-plan .plan-step { color: #555; margin-left: 8px; }
+    .agent-plan .plan-step .step-target { color: #4a3a8c; }
+    .agent-steps {
+        margin: 6px 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+    }
+    .agent-step-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        background: #e3f2fd;
+        color: #1565c0;
+    }
+    .agent-step-badge.tool { background: #e8f5e9; color: #2e7d32; }
+    .agent-step-badge.final { background: #fff3e0; color: #e65100; }
+    .agent-step-arrow { color: #bbb; font-size: 11px; }
+    .agent-validation {
+        margin: 6px 0;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .agent-val-box {
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 11px;
+        background: #f6f4fc;
+    }
+    .agent-val-box .val-label { color: #888; }
+    .agent-val-box .val-score { font-weight: bold; color: #4a3a8c; }
+    .agent-val-box.pass .val-score { color: #2e7d32; }
+    .agent-val-box.fail .val-score { color: #c0392b; }
+    .agent-retry {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        background: #fff3e0;
+        color: #e65100;
+        margin-top: 4px;
+    }
+    .agent-cost {
+        color: #aaa;
+        font-size: 11px;
+        margin-top: 4px;
+    }
 </style>
 </head>
 <body>
@@ -692,14 +764,14 @@
 <!-- ========== 问答界面 ========== -->
 <div class="page active" id="page-qa">
     <div class="topbar">
-        <div class="logo">迪士尼<span>RAG</span>问答助手</div>
+        <div class="logo">迪士尼<span>Agent</span>问答助手</div>
         <button class="btn btn-ghost" onclick="goLogin()">管理员模式</button>
     </div>
     <div class="qa-wrap">
         <div class="qa-card">
             <div class="qa-header">
-                <h2>问答助手</h2>
-                <div class="subtitle">输入问题，系统从知识库中找答案，有图就配图，有视频就配视频</div>
+                <h2>Agent 问答助手</h2>
+                <div class="subtitle">自主规划检索策略，调用工具，验证答案并自我修正</div>
             </div>
             <div class="qa-history" id="qa-history">
                 <div class="empty">暂无问答记录，开始提问吧</div>
@@ -1149,13 +1221,102 @@
         const div = document.createElement('div');
         div.className = 'msg bot loading';
         div.id = 'loading-msg';
-        div.textContent = '正在检索知识库并生成答案...';
+        div.textContent = 'Agent 正在规划检索策略并生成答案...';
         box.appendChild(div);
         box.scrollTop = box.scrollHeight;
     }
     function removeLoading() {
         const el = document.getElementById('loading-msg');
         if (el) el.remove();
+    }
+
+    /* 构建可折叠的 Agent 信息面板 */
+    function buildAgentPanel(data) {
+        let html = '<details class="agent-panel"><summary>Agent 推理过程</summary>';
+        // 检索计划
+        if (data.plan) {
+            html += '<div class="agent-plan">';
+            html += '<div class="plan-intent">意图：' + escapeHtml(data.plan.intent || '') + '</div>';
+            if (data.plan.steps && data.plan.steps.length) {
+                data.plan.steps.forEach((s, i) => {
+                    html += '<div class="plan-step">' + (i + 1) + '. ' +
+                            '<span class="step-target">' + escapeHtml(s.target || '') + '</span>' +
+                            ' [' + escapeHtml(s.modality || '') + '] - ' +
+                            escapeHtml(s.reason || '') + '</div>';
+                });
+            }
+            html += '</div>';
+        }
+        // 推理步骤
+        if (data.steps && data.steps.length) {
+            html += '<div class="agent-steps">';
+            data.steps.forEach((s, i) => {
+                if (i > 0) html += '<span class="agent-step-arrow">-></span>';
+                let cls = 'agent-step-badge';
+                if (s.action === 'final_answer') cls += ' final';
+                else cls += ' tool';
+                html += '<span class="' + cls + '">' + escapeHtml(s.action || '') + '</span>';
+            });
+            html += '</div>';
+        }
+        // 验证打分
+        if (data.validation) {
+            const v = data.validation;
+            html += '<div class="agent-validation">';
+            ['accuracy', 'citation', 'reasoning'].forEach(dim => {
+                if (v[dim]) {
+                    const score = v[dim].score || 0;
+                    const cls = score >= 0.8 ? 'pass' : 'fail';
+                    html += '<span class="agent-val-box ' + cls + '">' +
+                            '<span class="val-label">' + dim + '</span> ' +
+                            '<span class="val-score">' + score + '</span></span>';
+                }
+            });
+            if (v.overall !== undefined) {
+                html += '<span class="agent-val-box">overall <span class="val-score">' + v.overall + '</span></span>';
+            }
+            html += '</div>';
+        }
+        // 重试标记
+        if (data.retried) {
+            html += '<div class="agent-retry">已触发重新检索</div>';
+        }
+        // 成本
+        if (data.cost) {
+            html += '<div class="agent-cost">' +
+                    '调用 ' + (data.cost.call_count || 0) + ' 次 | ' +
+                    (data.cost.total_tokens || 0) + ' tokens | ' +
+                    (data.cost.estimated_cost || 0) + ' 元</div>';
+        }
+        html += '</details>';
+        return html;
+    }
+
+    function appendBotMsg(data) {
+        const box = document.getElementById('qa-history');
+        const div = document.createElement('div');
+        div.className = 'msg bot';
+        let html = '<div class="bubble">' + escapeHtml(data.answer || '无答案');
+        let media = '';
+        if (data.image_path) {
+            media += '<div class="media"><div style="font-size:12px;color:#888;">相关图片：</div>'
+                   + '<img src="' + mediaUrl(data.image_path) + '" alt="相关图片"></div>';
+        }
+        if (data.video_url) {
+            media += '<div class="media"><div style="font-size:12px;color:#888;">相关视频：</div>'
+                   + '<video src="' + escapeHtml(data.video_url) + '" controls></video></div>';
+        }
+        let refs = '';
+        if (data.references && data.references.length) {
+            refs = '<div class="refs">引用来源：'
+                 + data.references.map(r => escapeHtml(r.source) + '(' + r.similarity + ')').join('；')
+                 + '</div>';
+        }
+        // Agent 信息面板
+        let agentPanel = buildAgentPanel(data);
+        div.innerHTML = html + media + '</div>' + refs + agentPanel;
+        box.appendChild(div);
+        box.scrollTop = box.scrollHeight;
     }
 
     async function askQuestion() {
@@ -1166,11 +1327,9 @@
         appendUserMsg(q);
         appendLoading();
         try {
-            // 携带访客 UUID（localStorage 持久）+ 本次会话 ID（sessionStorage，浏览器关闭即失效）
-            // 后端用 session_id 把同一会话的多轮对话聚合起来，结束时会话后供 knowledge_distill 抽取
             const visitorId = getOrCreateVisitorId();
             const chatSessionId = getOrCreateChatSessionId();
-            const resp = await fetch('/api/ask', {
+            const resp = await fetch('/api/agent/chat', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({query: q, visitor_id: visitorId, session_id: chatSessionId})
@@ -1183,7 +1342,7 @@
                 const box = document.getElementById('qa-history');
                 const div = document.createElement('div');
                 div.className = 'msg bot error';
-                div.textContent = '查询失败：' + (data.message || '未知错误');
+                div.textContent = 'Agent 处理失败：' + (data.message || '未知错误');
                 box.appendChild(div);
             }
         } catch (e) {
