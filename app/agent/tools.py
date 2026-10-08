@@ -19,9 +19,9 @@ Agent 可根据检索计划（planner 输出）选择调用合适的工具。
 """
 import logging
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from app.config import MEDIA_DISTANCE_THRESHOLD, KB_DIR
+from app.config import MEDIA_DISTANCE_THRESHOLD, KB_DIR, QDRANT_COLLECTION_NAME
 from app.core import query
 
 logger = logging.getLogger(__name__)
@@ -32,10 +32,80 @@ OCR_MODEL = "qwen3-vl-8b-instruct"
 
 # ========== 工具实现（纯函数，依赖通过参数注入） ==========
 
-def _knowledge_search(query_str: str, k: int = 3) -> Dict[str, Any]:
-    """语义检索知识库文本片段
+def _fetch_original_text(qdrant_client, chunk_id: int) -> Optional[str]:
+    """根据 original_chunk_id 从 Qdrant 回查原始文本内容
 
-    复用 query.get_text_embedding + query.search_vectors，
+    diverse_question 条目存储的是 LLM 生成的问题，不是知识本身。
+    通过 original_chunk_id 回查对应的 type=text 条目，返回真正的知识内容。
+
+    Args:
+        qdrant_client: QdrantClient 实例
+        chunk_id: 原始文本条目的 Qdrant point ID
+
+    Returns:
+        原始文本 content；若条目不存在或已删除则返回 None
+    """
+    try:
+        points = qdrant_client.retrieve(
+            collection_name=QDRANT_COLLECTION_NAME,
+            ids=[chunk_id],
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not points:
+            return None
+        payload = points[0].payload or {}
+        if payload.get("deleted", False):
+            return None
+        return payload.get("content", "")
+    except Exception:
+        logger.warning("回查原文失败: chunk_id=%s", chunk_id, exc_info=True)
+        return None
+
+
+def _fetch_media_parent(qdrant_client, chunk_id: int) -> Optional[Dict[str, Any]]:
+    """根据 original_chunk_id 回查父媒体条目（image/video）
+
+    diverse_question 条目通过 original_chunk_id 指向父条目。生产链路的
+    image_search/video_search 需把 diverse_question 命中归因到父媒体条目，
+    取父条目的 path/url 作为返回结果，遵循 parent-child attribution 工业实践。
+
+    Args:
+        qdrant_client: QdrantClient 实例
+        chunk_id: 父条目的 Qdrant point ID（diverse_question.original_chunk_id）
+
+    Returns:
+        {"type", "path", "url"} 父媒体条目信息；非媒体条目或不存在返回 None
+    """
+    try:
+        points = qdrant_client.retrieve(
+            collection_name=QDRANT_COLLECTION_NAME,
+            ids=[chunk_id],
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not points:
+            return None
+        payload = points[0].payload or {}
+        if payload.get("deleted", False):
+            return None
+        media_type = payload.get("media_type", payload.get("type", ""))
+        if media_type not in ("image", "video"):
+            return None
+        return {
+            "type": media_type,
+            "path": payload.get("file_path", payload.get("path", "")),
+            "url": payload.get("url", ""),
+        }
+    except Exception:
+        logger.warning("回查父媒体条目失败: chunk_id=%s", chunk_id, exc_info=True)
+        return None
+
+
+def _knowledge_search(query_str: str, k: int = 3) -> Dict[str, Any]:
+    """混合检索知识库文本片段
+
+    复用 app.core.retrieval.hybrid_retrieve（查询改写 + 向量+BM25 RRF融合 + rerank精排），
     返回 top-k 文本类型的结果（排除已删除/图片/视频）。
 
     Args:
@@ -49,22 +119,58 @@ def _knowledge_search(query_str: str, k: int = 3) -> Dict[str, Any]:
     if qdrant_client is None:
         return {"error": "Qdrant 客户端未初始化", "results": []}
 
-    query_vec = query.get_text_embedding(query_str)
-    raw_results = query.search_vectors(query_vec, qdrant_client)
+    # 混合检索取 RERANK_TOP 条候选（留余量给 diverse_question 去重后仍满足 k 条）
+    from app.core.retrieval import hybrid_retrieve, RERANK_TOP
+    candidates = hybrid_retrieve(
+        query_str,
+        qdrant_client,
+        k=RERANK_TOP,
+        allowed_types={"text", "diverse_question"},
+    )
 
-    # 转换为统一格式，过滤非文本和已删除条目
+    # 已回查的 original_chunk_id 集合，避免同一原文被重复返回
+    seen_chunk_ids = set()
     text_results = []
-    for dist, _, m in raw_results:
+
+    for m in candidates:
         if m.get("deleted", False):
             continue
-        if m.get("type") not in ("text", "diverse_question"):
+        entry_type = m.get("type")
+        if entry_type not in ("text", "diverse_question"):
             continue
-        sim = query.distance_to_similarity(dist)
-        text_results.append({
-            "source": m.get("source", ""),
-            "content": m.get("content", ""),
-            "similarity": round(float(sim), 4),
-        })
+
+        # rerank 精排时取 rerank_score 作为相似度，未启用时取 rrf_score 兜底
+        sim = m.get("rerank_score")
+        if sim is None:
+            sim = m.get("rrf_score", 0.0)
+
+        # diverse_question 命中时，回查 original_chunk_id 对应的原文，返回真正的知识内容
+        if entry_type == "diverse_question":
+            original_chunk_id = m.get("original_chunk_id")
+            if original_chunk_id is None or original_chunk_id in seen_chunk_ids:
+                continue
+            original_content = _fetch_original_text(qdrant_client, original_chunk_id)
+            if original_content is None:
+                continue
+            seen_chunk_ids.add(original_chunk_id)
+            text_results.append({
+                "source": m.get("source", ""),
+                "content": original_content,
+                "similarity": round(float(sim), 4),
+            })
+        else:
+            # type=text，直接使用
+            chunk_id = m.get("id")
+            if chunk_id is not None and chunk_id in seen_chunk_ids:
+                continue
+            if chunk_id is not None:
+                seen_chunk_ids.add(chunk_id)
+            text_results.append({
+                "source": m.get("source", ""),
+                "content": m.get("content", ""),
+                "similarity": round(float(sim), 4),
+            })
+
         if len(text_results) >= k:
             break
 
@@ -75,8 +181,15 @@ def _knowledge_search(query_str: str, k: int = 3) -> Dict[str, Any]:
 def _image_search(query_str: str) -> Dict[str, Any]:
     """检索与查询语义最接近的图片
 
-    复用 query.get_text_embedding + query.search_vectors，
-    筛选 type=image 且 distance < MEDIA_DISTANCE_THRESHOLD 的结果。
+    复用 app.core.retrieval.hybrid_retrieve（向量+BM25 RRF融合，不启用 rerank），
+    筛选 type=image 且 vector_distance < MEDIA_DISTANCE_THRESHOLD 的结果。
+
+    生产链路对齐（P1-2 + P2-2）：
+    - allowed_types 包含 diverse_question，使图片的多样化问题也能参与召回
+    - diverse_question 命中时按 original_chunk_id 回源到父 image 条目，取父 path
+      （parent-child attribution，使媒体的多样化问题能为自己模态贡献命中）
+    - BM25-only 命中（vector_distance=None）用 rrf_score 兜底相似度，不再直接跳过
+    - modality_quota={"image":1} 兜底，配额尝试补入直接 image 条目
 
     Returns:
         {"found": bool, "image_path": str | null, "similarity": float}
@@ -85,28 +198,64 @@ def _image_search(query_str: str) -> Dict[str, Any]:
     if qdrant_client is None:
         return {"error": "Qdrant 客户端未初始化", "found": False}
 
-    query_vec = query.get_text_embedding(query_str)
-    raw_results = query.search_vectors(query_vec, qdrant_client)
+    # 图片检索：混合召回（向量+BM25）不启用 rerank，后续走距离阈值过滤
+    # allowed_types 含 diverse_question，回源后可命中父图片；modality_quota 兜底补入直接图片条目
+    from app.core.retrieval import hybrid_retrieve
+    candidates = hybrid_retrieve(
+        query_str,
+        qdrant_client,
+        k=20,
+        allowed_types={"image", "diverse_question"},
+        enable_rerank=False,
+        modality_quota={"image": 1},
+    )
 
     image_results = []
-    for dist, _, m in raw_results:
+    seen_parent_ids = set()  # diverse_question 回源去重，避免同一父图片重复计入
+    for m in candidates:
         if m.get("deleted", False):
             continue
-        if m.get("type") != "image":
-            continue
-        if dist < MEDIA_DISTANCE_THRESHOLD:
-            sim = query.distance_to_similarity(dist)
+        entry_type = m.get("type")
+
+        if entry_type == "image":
+            # 原逻辑：vector_distance 阈值过滤
+            dist = m.get("vector_distance")
+            if dist is not None:
+                # 向量命中：走 distance 阈值过滤
+                if dist >= MEDIA_DISTANCE_THRESHOLD:
+                    continue
+                sim = query.distance_to_similarity(dist)
+            else:
+                # P2-2：BM25-only 命中放宽限制，用 rrf_score 兜底相似度
+                sim = m.get("rerank_score") or m.get("rrf_score", 0.0)
             image_results.append({
                 "image_path": m.get("path", ""),
                 "similarity": round(float(sim), 4),
-                "distance": round(float(dist), 4),
+                "distance": round(float(dist), 4) if dist is not None else None,
+            })
+        elif entry_type == "diverse_question":
+            # P1-2：diverse_question 按 original_chunk_id 回源到父媒体条目
+            original_chunk_id = m.get("original_chunk_id")
+            if original_chunk_id is None or original_chunk_id in seen_parent_ids:
+                continue
+            parent = _fetch_media_parent(qdrant_client, original_chunk_id)
+            if parent is None or parent.get("type") != "image":
+                continue
+            seen_parent_ids.add(original_chunk_id)
+            # diverse_question 用 rrf_score 作为相似度（代表问题间语义相似度）
+            sim = m.get("rerank_score") or m.get("rrf_score", 0.0)
+            image_results.append({
+                "image_path": parent.get("path", ""),
+                "similarity": round(float(sim), 4),
+                "distance": None,  # 回源条目无直接向量距离
             })
 
     if not image_results:
         logger.info("image_search('%s') -> 无匹配图片", query_str)
         return {"found": False, "image_path": None}
 
-    image_results.sort(key=lambda x: x["distance"])
+    # 按相似度降序排序（原逻辑按 distance 升序等价于 similarity 降序，统一后兼容回源条目）
+    image_results.sort(key=lambda x: x["similarity"], reverse=True)
     best = image_results[0]
     logger.info("image_search('%s') -> 匹配图片: %s", query_str, best["image_path"])
     return {"found": True, **best}
@@ -115,34 +264,67 @@ def _image_search(query_str: str) -> Dict[str, Any]:
 def _video_search(query_str: str) -> Dict[str, Any]:
     """检索与查询语义最接近的视频
 
-    逻辑同 _image_search，筛选 type=video。
+    逻辑同 _image_search，筛选 type=video。生产链路对齐（P1-2 + P2-2）：
+    allowed_types 含 diverse_question 回源到父视频；BM25-only 命中用 rrf_score 兜底。
     """
     qdrant_client = _get_qdrant_client()
     if qdrant_client is None:
         return {"error": "Qdrant 客户端未初始化", "found": False}
 
-    query_vec = query.get_text_embedding(query_str)
-    raw_results = query.search_vectors(query_vec, qdrant_client)
+    # 视频检索：混合召回（向量+BM25）不启用 rerank，后续走距离阈值过滤
+    from app.core.retrieval import hybrid_retrieve
+    candidates = hybrid_retrieve(
+        query_str,
+        qdrant_client,
+        k=20,
+        allowed_types={"video", "diverse_question"},
+        enable_rerank=False,
+        modality_quota={"video": 1},
+    )
 
     video_results = []
-    for dist, _, m in raw_results:
+    seen_parent_ids = set()  # diverse_question 回源去重
+    for m in candidates:
         if m.get("deleted", False):
             continue
-        if m.get("type") != "video":
-            continue
-        if dist < MEDIA_DISTANCE_THRESHOLD:
-            sim = query.distance_to_similarity(dist)
+        entry_type = m.get("type")
+
+        if entry_type == "video":
+            # 原逻辑：vector_distance 阈值过滤
+            dist = m.get("vector_distance")
+            if dist is not None:
+                if dist >= MEDIA_DISTANCE_THRESHOLD:
+                    continue
+                sim = query.distance_to_similarity(dist)
+            else:
+                # P2-2：BM25-only 命中放宽限制，用 rrf_score 兜底相似度
+                sim = m.get("rerank_score") or m.get("rrf_score", 0.0)
             video_results.append({
                 "video_url": m.get("url", ""),
                 "similarity": round(float(sim), 4),
-                "distance": round(float(dist), 4),
+                "distance": round(float(dist), 4) if dist is not None else None,
+            })
+        elif entry_type == "diverse_question":
+            # P1-2：diverse_question 按 original_chunk_id 回源到父媒体条目
+            original_chunk_id = m.get("original_chunk_id")
+            if original_chunk_id is None or original_chunk_id in seen_parent_ids:
+                continue
+            parent = _fetch_media_parent(qdrant_client, original_chunk_id)
+            if parent is None or parent.get("type") != "video":
+                continue
+            seen_parent_ids.add(original_chunk_id)
+            sim = m.get("rerank_score") or m.get("rrf_score", 0.0)
+            video_results.append({
+                "video_url": parent.get("url", ""),
+                "similarity": round(float(sim), 4),
+                "distance": None,
             })
 
     if not video_results:
         logger.info("video_search('%s') -> 无匹配视频", query_str)
         return {"found": False, "video_url": None}
 
-    video_results.sort(key=lambda x: x["distance"])
+    video_results.sort(key=lambda x: x["similarity"], reverse=True)
     best = video_results[0]
     logger.info("video_search('%s') -> 匹配视频: %s", query_str, best["video_url"])
     return {"found": True, **best}

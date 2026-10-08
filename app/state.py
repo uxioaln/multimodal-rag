@@ -85,6 +85,11 @@ def load_resources():
 
     # 5. 初始化 KnowledgeBaseManager
     _kb_manager = KnowledgeBaseManager(_qdrant_client, _metadata)
+
+    # 6. 从 metadata 构建 BM25 关键词索引（混合检索 RRF 融合依赖）
+    from app.core.retrieval import build_bm25_from_metadata
+    build_bm25_from_metadata(_metadata)
+
     logger.info("已加载资源: collection '%s' 共 %s 条, metadata 缓存 %s 条",
                 QDRANT_COLLECTION_NAME, count.count, len(_metadata))
 

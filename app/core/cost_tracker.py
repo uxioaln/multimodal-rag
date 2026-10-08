@@ -23,6 +23,7 @@ MODEL_PRICING = {
     # AGICTO 平台
     "deepseek-v4-flash": {"input": 0.0001, "output": 0.0004},
     "deepseek-v4-pro": {"input": 0.0004, "output": 0.0016},
+    "gpt-4o": {"input": 0.0025, "output": 0.01},
     # DASHSCOPE 平台（OpenAI 兼容模式）
     "qwen-flash": {"input": 0.0001, "output": 0.0004},
     "qwen-plus": {"input": 0.0008, "output": 0.0020},

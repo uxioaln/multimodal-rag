@@ -44,6 +44,7 @@ PLANNER_SYSTEM_PROMPT = """你是一个检索规划专家。请分析用户问�
 你可以调用以下工具来规划检索：
 - search_documents(query): 语义检索知识库文本（门票、酒店、攻略、规则等）
 - search_images(query): 检索与查询相关的图片（海报、照片等）
+- search_videos(query): 检索与查询相关的视频
 - ocr_image(image_path): 对指定图片做 OCR 文字识别，提取图片中的文字
 
 ## 输出格式（必须是合法 JSON，不要输出其他内容）
@@ -53,7 +54,7 @@ PLANNER_SYSTEM_PROMPT = """你是一个检索规划专家。请分析用户问�
   "steps": [
     {
       "target": "检索目标关键词",
-      "modality": "text 或 image",
+      "modality": "text 或 image 或 video",
       "granularity": "paragraph 或 chunk",
       "reason": "为什么需要这一步检索"
     }
@@ -65,17 +66,20 @@ PLANNER_SYSTEM_PROMPT = """你是一个检索规划专家。请分析用户问�
 - intent: 用户问题的核心意图，一句话。
 - steps: 检索步骤列表，按执行顺序排列。
   - target: 这一步要检索的具体关键词或主题（中文）。
-  - modality: 检索模态。文本知识用 "text"，图片/海报用 "image"。
+  - modality: 检索模态。文本知识用 "text"，图片/海报用 "image"，视频用 "video"。
   - granularity: 检索粒度。"paragraph" 适合需要完整段落理解的问题；"chunk" 适合需要片段精确匹配的问题。
   - reason: 这一步检索的原因，一句话。
 
-## 规则
+## 规则（强制模态拆分）
 
 1. 当用户问题涉及多个实体的对比或分别检索时，应拆分为多个步骤，每个实体一步。
-2. 当用户明确提到"图片/海报/照片/看看"时，增加 image 检索步骤。
-3. 当用户需要从图片中提取文字信息时，规划 ocr_image 步骤。
-4. 不要编造不存在的检索目标，只基于用户问题中提到的内容。
-5. 输出必须是合法 JSON，不要包裹在 markdown 代码块中，不要输出任何解释文字。
+2. 当用户明确提到"图片/海报/照片/看看"时，必须增加 image 检索步骤。
+3. 当用户明确提到"视频/录像/影片"时，必须增加 video 检索步骤。
+4. 【强制模态拆分】当查询同时包含文本意图和图片/视频意图时，必须为每个模态生成独立的 step，分别走 image_search/video_search 定向检索，不要把多个模态合并到一个 step 中，也不要只生成 text 步骤而依赖 knowledge_search 混合召回。
+   - 例：用户问"聚在一起说奇妙的海报什么样"时，应生成一个 text 步骤检索"聚在一起说奇妙"的背景知识，再加一个 image 步骤检索"聚在一起说奇妙海报"的图片。
+5. 当用户需要从图片中提取文字信息时，规划 ocr_image 步骤（先有 image 步骤检索到图片，再有 image 步骤做 OCR）。
+6. 不要编造不存在的检索目标，只基于用户问题中提到的内容。
+7. 输出必须是合法 JSON，不要包裹在 markdown 代码块中，不要输出任何解释文字。
 
 ## 示例
 
@@ -90,6 +94,10 @@ PLANNER_SYSTEM_PROMPT = """你是一个检索规划专家。请分析用户问�
 输入: "万圣节活动海报长什么样？"
 输出:
 {"intent": "查看万圣节活动海报图片", "steps": [{"target": "万圣节活动海报", "modality": "image", "granularity": "chunk", "reason": "用户想看万圣节海报的图片"}]}
+
+输入: "聚在一起说奇妙的海报什么样？"
+输出:
+{"intent": "查看聚在一起说奇妙活动并获取海报图片", "steps": [{"target": "聚在一起说奇妙活动", "modality": "text", "granularity": "paragraph", "reason": "需要检索聚在一起说奇妙活动的背景知识"}, {"target": "聚在一起说奇妙海报", "modality": "image", "granularity": "chunk", "reason": "用户想看该活动的海报图片，走 image_search 定向检索"}]}
 
 输入: "活动海报上写了什么内容？"
 输出:
@@ -141,6 +149,64 @@ def plan_retrieval(user_query: str, tracker: CostTracker = None) -> Dict[str, An
     if not isinstance(plan["steps"], list):
         plan["steps"] = []
 
+    # 强制模态拆分：检测查询中的图片/视频意图，确保计划包含对应模态的独立 step
+    plan = _enforce_modality_split(plan, user_query)
+
+    return plan
+
+
+def _enforce_modality_split(plan: Dict[str, Any], user_query: str) -> Dict[str, Any]:
+    """强制模态拆分：混合意图查询必须为每个模态生成独立 step
+
+    即使 LLM 漏拆分或只生成了 text 步骤，本函数通过 detect_media_intent
+    检测查询中的图片/视频意图，并补全对应的 image/video step，
+    确保后续 Agent 走 image_search/video_search 定向检索，而非依赖
+    knowledge_search 混合召回（文本占多数会挤出图片/视频结果）。
+
+    策略：
+    1. 用 detect_media_intent 判定 want_image / want_video
+    2. 统计 plan 中已有 image / video 步骤数
+    3. 若缺对应模态 step，补一条以用户查询关键词为 target 的 step
+
+    Args:
+        plan: LLM 生成的检索计划
+        user_query: 用户原始查询（用于补全 step 的 target）
+
+    Returns:
+        补全后的检索计划
+    """
+    want_image, want_video = query.detect_media_intent(user_query)
+    if not want_image and not want_video:
+        return plan
+
+    steps: List[Dict] = plan.get("steps", [])
+    has_image_step = any(s.get("modality") == "image" for s in steps)
+    has_video_step = any(s.get("modality") == "video" for s in steps)
+
+    appended = False
+    # 缺图片步骤则补一条 image step
+    if want_image and not has_image_step:
+        steps.append({
+            "target": user_query,
+            "modality": "image",
+            "granularity": "chunk",
+            "reason": "查询含图片意图，强制补全 image 步骤走 image_search 定向检索",
+        })
+        appended = True
+    # 缺视频步骤则补一条 video step
+    if want_video and not has_video_step:
+        steps.append({
+            "target": user_query,
+            "modality": "video",
+            "granularity": "chunk",
+            "reason": "查询含视频意图，强制补全 video 步骤走 video_search 定向检索",
+        })
+        appended = True
+
+    if appended:
+        plan["steps"] = steps
+        logger.info("强制模态拆分: 查询含媒体意图，已补全独立模态 step (want_image=%s, want_video=%s)",
+                    want_image, want_video)
     return plan
 
 

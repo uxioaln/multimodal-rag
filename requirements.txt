@@ -12,3 +12,6 @@ flask==3.0.3
 gradio>=5.0
 requests>=2.31.0
 sseclient-py>=1.7.2
+# 混合检索（BM25 关键词检索 + 中文分词）
+rank_bm25==0.2.2
+jieba==0.42.1

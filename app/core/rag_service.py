@@ -99,7 +99,8 @@ def rag_ask_api(
         messages=[
             {"role": "system", "content": "你是一个迪士尼客服助手。"},
             {"role": "user", "content": prompt}
-        ]
+        ],
+        temperature=0.3,
     )
     answer = completion.choices[0].message.content
 

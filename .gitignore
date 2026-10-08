@@ -61,3 +61,6 @@ htmlcov/
 .tox/
 .pytest_cache/
 .mypy_cache/
+
+# IDE 配置
+.trae/

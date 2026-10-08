@@ -36,11 +36,13 @@ from app.config import (
     DOCS_DIR,
     HASHES_FILE,
     IMG_DIR,
+    MEDIA_DIVERSE_QUESTION_NUM,
     MULTIMODAL_EMBEDDING_MODEL,
     QDRANT_COLLECTION_NAME,
     QDRANT_HNSW_M,
     QDRANT_PATH,
     QDRANT_VECTOR_SIZE,
+    VISION_MODEL,
 )
 from app.core.cost_tracker import tracked_chat_completion
 
@@ -70,6 +72,13 @@ VIDEO_KNOWLEDGE = [
         "description": "汽车剐蹭视频"
     }
 ]
+
+# 图片语义描述映射（用于 embedding 混合输入，提升跨模态召回率）
+# key 为图片文件名，value 为该图片的语义描述文本
+IMAGE_DESCRIPTIONS = {
+    "2-万圣节.jpeg": "上海迪士尼万圣节主题布置装饰，南瓜灯、幽灵、万圣节氛围，园区 Halloween 装点",
+    "1-聚在一起说奇妙.jpg": "上海迪士尼奇妙讲述会场景，卡通角色聚在一起说奇妙，生日庆典互动",
+}
 
 
 # ========== Payload 与 Metadata 双向转换 ==========
@@ -394,8 +403,8 @@ def get_text_embedding(text: str) -> List[float]:
     return resp.output['embeddings'][0]['embedding']
 
 
-def get_image_embedding(image_path):
-    """图片embedding"""
+def get_image_embedding(image_path, text_description: str = ""):
+    """图片embedding（可选附带文本描述，混合输入提升跨模态召回）"""
     with open(image_path, "rb") as f:
         base64_image = base64.b64encode(f.read()).decode('utf-8')
 
@@ -404,20 +413,32 @@ def get_image_embedding(image_path):
         ext = 'jpeg'
     image_data = f"data:image/{ext};base64,{base64_image}"
 
+    # 混合输入：文本 + 图片，组合后 embedding 同时包含视觉和文本语义
+    # 使文本查询更容易检索到相关图片，提升跨模态 Recall
+    multimodal_input = []
+    if text_description:
+        multimodal_input.append({'text': text_description})
+    multimodal_input.append({'image': image_data})
+
     resp = dashscope.MultiModalEmbedding.call(
         model=MULTIMODAL_EMBEDDING_MODEL,
-        input=[{'image': image_data}]
+        input=multimodal_input
     )
     if resp.status_code != HTTPStatus.OK:
         raise Exception(f"图片Embedding失败: {resp.message}")
     return resp.output['embeddings'][0]['embedding']
 
 
-def get_video_embedding(video_url: str) -> List[float]:
-    """视频 embedding（多帧取平均）"""
+def get_video_embedding(video_url: str, text_description: str = "") -> List[float]:
+    """视频 embedding（多帧取平均，可选附带文本描述提升跨模态召回）"""
+    multimodal_input = []
+    if text_description:
+        multimodal_input.append({'text': text_description})
+    multimodal_input.append({'video': video_url})
+
     resp = dashscope.MultiModalEmbedding.call(
         model=MULTIMODAL_EMBEDDING_MODEL,
-        input=[{'video': video_url}]
+        input=multimodal_input
     )
     if resp.status_code != HTTPStatus.OK:
         raise Exception(f"视频Embedding失败: {resp.message}")
@@ -427,6 +448,160 @@ def get_video_embedding(video_url: str) -> List[float]:
         vectors = [np.array(e['embedding']) for e in embeddings]
         return np.mean(vectors, axis=0).tolist()
     return embeddings[0]['embedding']
+
+
+# ========== 图片/视频多角度语义描述（qwen-vl-plus） ==========
+
+def _encode_image_to_data_uri(image_path: str) -> str:
+    """将本地图片转为 base64 data URI，供 AGICTO OpenAI 兼容接口使用"""
+    with open(image_path, "rb") as f:
+        base64_image = base64.b64encode(f.read()).decode('utf-8')
+    ext = os.path.splitext(image_path)[1].lower().lstrip('.')
+    if ext == 'jpg':
+        ext = 'jpeg'
+    return f"data:image/{ext};base64,{base64_image}"
+
+
+def generate_rich_image_description(image_path: str) -> str:
+    """用 qwen-vl-plus 生成图片的多角度语义描述
+
+    生成内容覆盖：场景描述 + 画面文字 OCR + 关键实体 + 适用问题，
+    用于图片 embedding 的混合文本输入，提升跨模态向量召回率和 rerank 排序质量。
+    描述质量直接决定向量召回与 rerank 精排效果。
+
+    Args:
+        image_path: 图片本地路径
+
+    Returns:
+        多角度语义描述文本（含场景/OCR/实体/适用问题）
+    """
+    if agicto_client is None:
+        raise ValueError("错误：图片语义描述生成需要设置 'AGICTO_API_KEY' 环境变量。")
+
+    image_data = _encode_image_to_data_uri(image_path)
+
+    prompt = """请对这张图片生成多角度语义描述，用于知识库检索。严格按以下结构输出（不要输出其他内容）：
+
+【场景描述】用一句话概括图片的整体场景和主题（中文，不超过50字）
+【画面文字】提取图片中所有可见文字（OCR），按原文输出；如无文字写"无"
+【关键实体】列出图片中的关键实体（角色、地标、物品等），逗号分隔，不超过8个
+【适用问题】列出这张图片适合回答的3个问题，每个问题一行，用"1. 2. 3."编号"""
+
+    response = tracked_chat_completion(
+        client=agicto_client,
+        model=VISION_MODEL,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": image_data}},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+        temperature=0.3,
+        source="图片语义描述",
+    )
+    description = response.choices[0].message.content.strip()
+    logger.info("图片语义描述生成完成: %s (%s 字)", os.path.basename(image_path), len(description))
+    return description
+
+
+def generate_rich_video_description(video_info: Dict) -> str:
+    """用 LLM 为视频生成多角度语义描述
+
+    视频无法直接用 qwen-vl-plus 理解（dashscope 免费额度耗尽、AGICTO OpenAI 兼容接口
+    不支持视频 URL 输入），改用文本 LLM（DIVERSE_REWRITE_MODEL）基于视频已知信息
+    （description + url + 业务上下文）生成多角度描述，遵循 LLM-based captioning 工业实践。
+
+    生成内容覆盖：内容概述 + 关键场景 + 适用场景 + 适用问题，用于视频 embedding 的
+    混合文本输入，提升跨模态向量召回率。与图片的 generate_rich_image_description 对齐。
+
+    Args:
+        video_info: VIDEO_KNOWLEDGE 条目，含 url 和 description
+
+    Returns:
+        多角度语义描述文本
+    """
+    base_desc = video_info.get("description", "")
+    video_url = video_info.get("url", "")
+
+    prompt = f"""请为以下视频生成多角度语义描述，用于知识库检索。严格按以下结构输出（不要输出其他内容）：
+
+【内容概述】用一句话概括视频的核心内容（中文，不超过50字）
+【关键场景】描述视频中可见的关键画面/场景/动作，逗号分隔，不超过5个
+【适用场景】列出该视频适合在什么场景下被检索到（如"汽车剐蹭理赔参考""事故处理流程"），逗号分隔
+【适用问题】列出这段视频适合回答的3个问题，每个问题一行，用"1. 2. 3."编号
+
+### 视频基本信息 ###
+- 视频描述：{base_desc}
+- 视频URL：{video_url}
+
+### 生成结果 ###
+"""
+
+    description = get_llm_completion(prompt)
+    logger.info("视频语义描述生成完成: %s (%s 字)", base_desc, len(description))
+    return description
+
+
+def generate_media_diverse_questions(content: str, num_questions: int = MEDIA_DIVERSE_QUESTION_NUM) -> List[Dict]:
+    """为图片/视频素材生成多样化问题
+
+    基于素材的语义描述（场景/OCR/实体/适用问题）生成多角度提问，
+    扩充每条素材的 diverse questions 数量，提升跨模态召回覆盖度。
+    与文本 chunk 的 generate_diverse_questions 逻辑一致，但面向媒体素材。
+
+    Args:
+        content: 媒体素材的语义描述文本
+        num_questions: 生成问题数量，默认 MEDIA_DIVERSE_QUESTION_NUM
+
+    Returns:
+        [{"question", "question_type", "perspective"}, ...]
+    """
+    if agicto_client is None:
+        raise ValueError("错误：媒体多样化问题生成需要设置 'AGICTO_API_KEY' 环境变量。")
+
+    instruction = """
+你是一个专业的问答系统专家。请为给定的媒体素材描述生成高度多样化的问题，确保：
+1. 问题类型多样化：直接问、间接问、对比问、条件问、假设问、推理问等
+2. 表达方式多样化：使用不同的句式、词汇、语气
+3. 角度多样化：从不同角度和维度提问
+4. 确保问题不超出素材描述范围
+
+请返回JSON格式：
+{
+    "questions": [
+        {
+            "question": "问题内容",
+            "question_type": "问题类型",
+            "perspective": "提问角度"
+        }
+    ]
+}
+"""
+
+    prompt = f"""
+### 指令 ###
+{instruction}
+
+### 媒体素材描述 ###
+{content}
+
+### 生成问题数量 ###
+{num_questions}
+
+### 生成结果 ###
+"""
+
+    response = get_llm_completion(prompt)
+    response = preprocess_json_response(response)
+
+    try:
+        result = json.loads(response)
+        return result.get('questions', [])
+    except json.JSONDecodeError as e:
+        logger.warning("媒体多样化问题生成JSON解析失败: %s", e)
+        logger.debug("AI返回内容: %s", response[:200])
+        return []
 
 
 # ========== 文本 chunk 条目构建 ==========
@@ -624,7 +799,7 @@ def build_and_save(progress_callback: Optional[ProgressCallback] = None) -> None
 
             emit("doc", len(all_points), 0, f"文档处理完成: {filename}，累计 {len(all_points)} 条")
 
-    # 处理图片（不再需要OCR，多模态embedding已包含图片语义）
+    # 处理图片（qwen-vl-plus 生成多角度语义描述 + 多样化问题，提升跨模态召回）
     logger.info("  处理图片...")
     image_list = [f for f in os.listdir(IMG_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))]
     emit("image", 0, len(image_list), f"开始处理 {len(image_list)} 张图片")
@@ -632,32 +807,77 @@ def build_and_save(progress_callback: Optional[ProgressCallback] = None) -> None
         img_path = os.path.join(IMG_DIR, img_filename)
         logger.info("    - %s", img_filename)
 
+        # 用 qwen-vl-plus 生成多角度语义描述（场景+OCR+关键实体+适用问题）
+        img_description = generate_rich_image_description(img_path)
+
+        # 为图片生成多样化问题，扩充跨模态召回覆盖度
+        diverse_questions = generate_media_diverse_questions(img_description)
+        logger.info("      生成 %s 个多样化问题", len(diverse_questions))
+
         metadata = {
             "id": point_id,
             "doc_id": f"image_{img_filename}",
             "source": f"图片: {img_filename}",
             "type": "image",
             "path": img_path,
-            "content": f"[图片] {img_filename}",
+            "content": img_description,
+            "diverse_questions": diverse_questions,
             "last_updated": today_str,
             "created_at": created_at,
             "chunk_index": 0,
         }
 
-        vector = get_image_embedding(img_path)
+        vector = get_image_embedding(img_path, text_description=img_description)
         all_points.append(models.PointStruct(
             id=point_id,
             vector=vector,
             payload=metadata_to_payload(metadata),
         ))
         point_id += 1
+
+        # 为每个多样化问题创建独立的 diverse_question 条目（与文本 chunk 一致）
+        for q_data in diverse_questions:
+            question = q_data.get('question', '')
+            if not question.strip():
+                continue
+            q_metadata = {
+                "id": point_id,
+                "doc_id": f"image_{img_filename}",
+                "source": f"图片: {img_filename}",
+                "type": "diverse_question",
+                "content": question,
+                "original_chunk_id": metadata["id"],
+                "question_type": q_data.get('question_type', ''),
+                "perspective": q_data.get('perspective', ''),
+                "last_updated": today_str,
+                "created_at": created_at,
+                "chunk_index": 0,
+            }
+            combined_text = f"内容：{img_description} 问题：{question}"
+            q_vector = get_text_embedding(combined_text)
+            all_points.append(models.PointStruct(
+                id=point_id,
+                vector=q_vector,
+                payload=metadata_to_payload(q_metadata),
+            ))
+            point_id += 1
+
         emit("image", idx, len(image_list), f"已处理图片 {idx}/{len(image_list)}: {img_filename}")
 
-    # 处理视频
+    # 处理视频（描述+多样化问题，提升跨模态召回覆盖度）
     logger.info("  处理视频...")
     emit("video", 0, len(VIDEO_KNOWLEDGE), f"开始处理 {len(VIDEO_KNOWLEDGE)} 个视频")
     for idx, video_info in enumerate(VIDEO_KNOWLEDGE, 1):
         logger.info("    - %s", video_info['description'])
+
+        # 用 LLM 生成多角度语义描述（内容概述+关键场景+适用场景+适用问题），
+        # 替换 5 字硬编码 description，提升跨模态向量召回率
+        rich_description = generate_rich_video_description(video_info)
+        video_description = rich_description
+
+        # 为视频生成多样化问题，扩充跨模态召回覆盖度
+        diverse_questions = generate_media_diverse_questions(video_description)
+        logger.info("      生成 %s 个多样化问题", len(diverse_questions))
 
         metadata = {
             "id": point_id,
@@ -666,19 +886,48 @@ def build_and_save(progress_callback: Optional[ProgressCallback] = None) -> None
             "type": "video",
             "url": video_info["url"],
             "description": video_info["description"],
-            "content": f"[视频] {video_info['description']}",
+            "content": video_description,
+            "diverse_questions": diverse_questions,
             "last_updated": today_str,
             "created_at": created_at,
             "chunk_index": 0,
         }
 
-        vector = get_video_embedding(video_info["url"])
+        vector = get_video_embedding(video_info["url"], text_description=video_description)
         all_points.append(models.PointStruct(
             id=point_id,
             vector=vector,
             payload=metadata_to_payload(metadata),
         ))
         point_id += 1
+
+        # 为每个多样化问题创建独立的 diverse_question 条目
+        for q_data in diverse_questions:
+            question = q_data.get('question', '')
+            if not question.strip():
+                continue
+            q_metadata = {
+                "id": point_id,
+                "doc_id": f"video_{video_info['description']}",
+                "source": f"视频: {video_info['description']}",
+                "type": "diverse_question",
+                "content": question,
+                "original_chunk_id": metadata["id"],
+                "question_type": q_data.get('question_type', ''),
+                "perspective": q_data.get('perspective', ''),
+                "last_updated": today_str,
+                "created_at": created_at,
+                "chunk_index": 0,
+            }
+            combined_text = f"内容：{video_description} 问题：{question}"
+            q_vector = get_text_embedding(combined_text)
+            all_points.append(models.PointStruct(
+                id=point_id,
+                vector=q_vector,
+                payload=metadata_to_payload(q_metadata),
+            ))
+            point_id += 1
+
         emit("video", idx, len(VIDEO_KNOWLEDGE), f"已处理视频 {idx}/{len(VIDEO_KNOWLEDGE)}: {video_info['description']}")
 
     # 批量写入 Qdrant

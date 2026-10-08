@@ -68,12 +68,39 @@ MULTIMODAL_EMBEDDING_MODEL = "tongyi-embedding-vision-plus"
 CHAT_BASE_URL = "https://api.agicto.cn/v1"
 CHAT_MODEL = "deepseek-v4-flash"
 
+# 评测 judge 模型（AGICTO 平台，gpt-4o 作为更强第三方裁判，减少自我偏好偏差）
+JUDGE_MODEL = "gpt-4o"
+
+# 验证器模型（与 judge 一致，用于离散分档打分和 claim 级蕴含判断）
+VALIDATOR_MODEL = "gpt-4o"
+
 # 多样化改写专用模型（要求较高，索引构建时调用）
 DIVERSE_REWRITE_MODEL = "deepseek-v4-pro"
+
+# 视觉理解模型（AGICTO 平台，qwen-vl-plus 用于图片多角度语义描述生成）
+VISION_MODEL = "qwen-vl-plus"
+
+# Rerank 精排模型（AGICTO 平台 cross-encoder，走 /v1/rerank 接口）
+RERANK_MODEL = "rerank-v3.5"
+
+# 图片/视频多样化问题生成数量（每条素材扩充的问题数，影响跨模态召回覆盖度）
+MEDIA_DIVERSE_QUESTION_NUM = 8
 
 # ========== 媒体意图关键词 ==========
 IMAGE_KEYWORDS = ["图片", "海报", "照片", "看看", "长什么样", "图"]
 VIDEO_KEYWORDS = ["视频", "录像", "影片", "看一下", "播放"]
+
+# ========== Agent 链路护栏参数 ==========
+# 检索结果相关性阈值：knowledge_search 返回的最高 similarity 低于此值时触发拒答
+MIN_RELEVANCE_SCORE = 0.3
+# 检索结果最少条数：低于此条数时触发拒答引导
+MIN_RELEVANCE_COUNT = 1
+
+# ========== 验证器参数 ==========
+# 多次采样投票次数（离散分档打分时每个维度采样 N 次取众数）
+VALIDATOR_SAMPLE_COUNT = 3
+# 采样温度（高温增加多样性，配合投票提升稳定性）
+VALIDATOR_SAMPLE_TEMPERATURE = 0.3
 
 # ========== 环境变量读取（fail-fast） ==========
 # DashScope API Key 已改为可选（embedding 和 OCR 均已迁移至 AGICTO 平台）

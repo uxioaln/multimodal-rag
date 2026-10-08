@@ -62,12 +62,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 RANDOM_SEED = 42
 CHUNK_MIN_LEN = 200          # chunk 最小长度（字）
 CHUNK_MAX_LEN = 500          # chunk 最大长度（字）
-TARGET_CHUNK_COUNT = 100     # 从 docx 抽取的 chunk 数量上限
+TARGET_CHUNK_COUNT = 20      # 从 docx 抽取的 chunk 数量上限
 QUESTIONS_PER_CHUNK = 3      # 每个 chunk 生成的问题数
-TARGET_HISTORY_QUERY_COUNT = 100  # 从历史对话抽取的 query 数量上限
+TARGET_HISTORY_QUERY_COUNT = 20  # 从历史对话抽取的 query 数量上限
 GT_TOP_K = 20                # Ground Truth Top-K（暴力搜索精确 Top-20）
 SEARCH_TOP_K = 10            # 检索 Top-K
-HNSW_EF_LIST = [64, 96, 128, 192, 256, 384, 512]  # 待测试的 hnsw_ef 档位
+HNSW_EF_LIST = [128, 256, 512]  # 待测试的 hnsw_ef 档位（精简为 3 档）
 FAISS_NPROBE = 1             # FAISS IVF nprobe（与旧生产配置一致）
 EMBEDDING_CALL_INTERVAL = 0.1  # embedding 调用间隔（秒），避免触发限流
 LLM_CALL_INTERVAL = 0.2        # LLM 调用间隔（秒）
